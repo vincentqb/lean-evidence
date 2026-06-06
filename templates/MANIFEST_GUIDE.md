@@ -485,6 +485,117 @@ If the count is large and most are NOT in generated/exhaustive
 contexts, you have the dress-up problem. The fix is the workflow
 described in `examples-of-good-theorems.lean`.
 
+### 5g. The name-vs-claim mismatch (theorem debt)
+
+The most insidious anti-pattern: a theorem whose **name and
+doc-comment promise X** but whose **Prop body proves a weaker
+sub-claim Y**. The kernel-checks the body (Y), the trust report
+shows it as ProvenTheorem, downstream callers cite the name (X).
+The X-vs-Y gap goes undetected.
+
+**Concrete example we caught (l3m, 2026-06-06):**
+
+```lean
+-- BEFORE (broken):
+
+/-- After gitSnapshot + writeFile, gitRestore recovers the pre-edit
+    content. Proven on MemFS: after set, the content is recoverable. -/
+ProvenTheorem edit_unconditional_reversibility :
+  ∀ (path content : String) (fs : MemFS),
+    (fs.set path content).get path = some content
+```
+
+The doc-comment promises **round-trip reversibility**: snapshot
++ write + restore returns to the original state. The Prop body
+just says **set then get returns the written content** — which
+is read-after-write, not reversibility. (It's a duplicate of
+`memfs_read_after_write` right next to it.)
+
+The name was citing a richer claim than the body actually
+delivered. Worse: a runtime tool (`/undo`) was relying on this
+theorem's name as a contract, but the runtime didn't actually
+implement the snapshot mechanism the name implied.
+
+The fix is the disciplined cycle:
+
+**1. Recognize the gap explicitly.** Don't paper it over with a
+slightly tighter doc-comment. Name it as theorem debt:
+"this theorem's name is a promise we don't keep."
+
+**2. Write the real theorem.** Whatever the name promised, that's
+the Prop body now. If the kernel can't accept the proof, you've
+just learned something: the math you thought was true might not
+be (or might require additional hypotheses).
+
+```lean
+-- AFTER (real round-trip):
+
+/-- The real round-trip reversibility theorem.
+
+    Given any MemFS state, mutating one path with `set newContent`
+    and then "restoring" — by re-`set`ing the captured prior
+    content, or `delete`ing if the path didn't exist — recovers
+    every path's prior content. -/
+ProvenTheorem set_unconditionally_reversible :
+  ∀ (path : String) (newContent : String) (fs : MemFS) (k : String),
+    let priorContent : Option String := fs.get path
+    let modified := fs.set path newContent
+    let restored : MemFS :=
+      match priorContent with
+      | none => modified.delete path
+      | some c => modified.set path c
+    restored.get k = fs.get k
+```
+
+The name is honest. The Prop body actually expresses the round-trip
+law. The proof is small (~50 lines, real case analysis on prior
+content × case analysis on the queried key).
+
+**3. Document the failure honestly.** User-facing claims that
+relied on the broken theorem must change. If the README said "we
+support undo," and the underlying theorem was bogus, the README
+needs to say what we ACTUALLY support — even if that's weaker
+than what we used to claim.
+
+This is the hardest step. It feels like admitting failure. Do
+it anyway. A README that overpromises is worse than one that
+under-promises; the gap between promise and reality is the
+exact thing manifests are designed to surface.
+
+**4. Make the runtime deliver the new (honest) claim.** If the
+theorem says "given a snapshot, restore is unambiguous," the
+runtime must actually take the snapshot. If the doc says
+"per-action restore via parallel log branch," the parallel log
+branch must exist and tools must record to it.
+
+This is the test of whether the manifest discipline works end-to-
+end. The theorem's existence is a kernel claim; the runtime's
+behavior is what users see; the doc is what they're told. All
+three must converge or you have theorem debt — proven math
+sitting beside a runtime that doesn't compose with it.
+
+**The pattern in five steps:**
+
+1. Spot the gap (often: a careful re-read of a theorem's body
+   in light of its name).
+2. Write the real theorem; prove it (or fail to and learn).
+3. Update user-facing docs to match what's actually delivered
+   today (the layered honest claim, with caveats).
+4. Build the runtime infrastructure to bridge between the kernel
+   theorem and the runtime promise.
+5. Verify end-to-end: theorem → runtime → docs all telling the
+   same story.
+
+Each step is independently shippable. Steps 1-3 can land before
+step 4; the docs become honest immediately, and the runtime work
+is then targeted at delivering the now-honest promise.
+
+**This is the manifests discipline working as intended.** The
+theorem doesn't make the runtime correct; it makes the gap
+between intent and reality *legible*. When you fix a theorem,
+you've also discovered every place the system relied on the
+broken claim.
+
 ---
 
 ## 6. Promotion discipline

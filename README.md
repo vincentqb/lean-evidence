@@ -79,7 +79,11 @@ is a single keyword change; the build verifies the new level's
 requirements are met.
 
 For the working manual for manifest authors, see
-`templates/MANIFEST_GUIDE.md`.
+`templates/MANIFEST_GUIDE.md`. For the disciplined cycle to apply
+when you discover a theorem's body doesn't match its name, see
+§ 5g of the guide ("name-vs-claim mismatch") — this is the
+discipline working as intended: surfacing gaps between intent
+and reality so they can be fixed.
 
 ## Starting a new project
 
