@@ -7,7 +7,7 @@ meta section
 
 open Lean
 
-namespace LeanManifests
+namespace LeanEvidence
 
 inductive EvidenceKind where
   | proven | derived | unproven | tested | failing | sketch | world | unitTest | fixture
@@ -99,7 +99,7 @@ def namedAssumptions (root : Name) : CoreM (Array Name) := do
       | throwError "Cannot inspect the assumed dependency {n}"
     let deps := info.getUsedConstantsAsSet
     if deps.contains ``sorryAx then
-      throwError "{root} uses raw sorry in {n}; declare the assumption in a manifest."
+      throwError "{root} uses raw sorry in {n}; register the named assumption."
     unless (info.value? (allowOpaque := true)).isSome do
       throwError "Cannot name assumptions behind the hidden body of {n}. Use import all for this package's proof module."
     for dep in deps.toArray do todo := todo.push dep
@@ -125,7 +125,7 @@ initialize theoremsExtension : SimplePersistentEnvExtension (Name × Array Name)
 
 initialize registerBuiltinAttribute {
     name := `theoremsAttr
-    descr := "author-supplied links from an API declaration to manifest claims"
+    descr := "author-supplied links from an API declaration to registered claims"
     add := fun n stx kind => do
       unless kind == .global do throwError "theorems requires a global attribute"
       let claims ← match stx with
@@ -133,7 +133,7 @@ initialize registerBuiltinAttribute {
         | _ => throwError "invalid theorems attribute"
       for claim in claims do
         unless (getEvidence? (← getEnv) claim).isSome do
-          throwError "{claim} has no manifest evidence"
+          throwError "{claim} has no registered evidence"
       let previous := ((theoremsExtension.getState (← getEnv))[n]?).getD #[]
       let merged := claims.foldl
         (fun acc claim => if acc.contains claim then acc else acc.push claim) previous
@@ -175,4 +175,4 @@ initialize entryPointAttr : TagAttribute ←
 def isEntryPoint (env : Environment) (n : Name) : Bool :=
   entryPointAttr.hasTag env n
 
-end LeanManifests
+end LeanEvidence

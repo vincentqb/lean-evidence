@@ -1,14 +1,14 @@
 import Lake
 open Lake DSL
 
-package «lean_manifests» where
+package «lean_evidence» where
   leanOptions := #[
     ⟨`autoImplicit, false⟩
   ]
 
 @[default_target]
-lean_lib «LeanManifests» where
-  globs := #[.one `LeanManifests, .submodules `LeanManifests]
+lean_lib «LeanEvidence» where
+  globs := #[.one `LeanEvidence, .submodules `LeanEvidence]
 
 @[default_target]
 lean_lib «Examples» where
@@ -19,6 +19,6 @@ lean_lib «Tests» where
 
 @[test_driver]
 script test do
-  let code ← env "lake" #["build", "LeanManifests", "Examples", "Tests"]
+  let code ← env "lake" #["build", "LeanEvidence", "Examples", "Tests"]
   if code != 0 then return code
   env "lean" #["--run", "Scripts/ReportSmoke.lean"]

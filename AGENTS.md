@@ -1,4 +1,4 @@
-# Working on lean-manifests
+# Working on LeanEvidence
 
 Use the stable Lean version pinned in `lean-toolchain`. This project supports
 that version only; remove obsolete compatibility paths when upgrading.
@@ -16,7 +16,7 @@ Keep the computational core pure and effects in adapters. Represent external
 behavior as explicit `WorldClaim` hypotheses; keep runtime conformance evidence
 distinct from kernel proofs of the Lean model. Avoid incidental comments.
 
-When changing an evidence check, update its regression tests and self-manifest.
+When changing an evidence check, update its regression tests and library contracts.
 A test receipt, lint result, or prose assertion is not a proof of
 an implementation contract. Never replace missing formalization with `True` or
 a `sorry` theorem labelled as proved.

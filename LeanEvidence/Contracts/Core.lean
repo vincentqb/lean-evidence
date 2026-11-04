@@ -1,15 +1,15 @@
 module
 
-public meta import LeanManifests.Basic
-import all LeanManifests.Attr
-import all LeanManifests.Basic
+public meta import LeanEvidence.Basic
+import all LeanEvidence.Attr
+import all LeanEvidence.Basic
 
 public section
 meta section
 
 open Lean
 
-namespace LeanManifests.Contracts
+namespace LeanEvidence.Contracts
 
 ProvenTheorem standard_axioms_iff : ∀ axioms : Array Name,
     (nonstandardAxioms axioms).isEmpty = true ↔
@@ -91,4 +91,4 @@ attribute [theorems proof_required_iff] EvidenceKind.requiresProof
 attribute [theorems complete_iff] Evidence.isComplete
 attribute [theorems unfinished_incomplete] Evidence.needsWork
 
-end LeanManifests.Contracts
+end LeanEvidence.Contracts

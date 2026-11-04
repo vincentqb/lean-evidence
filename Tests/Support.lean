@@ -1,11 +1,11 @@
 module
 
-public meta import LeanManifests.Basic
+public meta import LeanEvidence.Basic
 
 public section
 meta section
 
-open Lean Elab Command LeanManifests
+open Lean Elab Command LeanEvidence
 
 namespace Tests
 

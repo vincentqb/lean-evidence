@@ -1,13 +1,13 @@
 module
 
-public meta import LeanManifests.Report
+public meta import LeanEvidence.Report
 
 public section
 meta section
 
 open Lean
 
-namespace LeanManifests.Workplan
+namespace LeanEvidence.Workplan
 
 private def complete (env : Environment) (n : Name) : Bool :=
   (getEvidence? env n).any Evidence.isComplete
@@ -33,4 +33,4 @@ def run (scope : Name) (outPath : System.FilePath) (imports : Array Import) : IO
   let json ← Report.withEnvironment imports (collect scope)
   IO.FS.writeFile outPath json.pretty
 
-end LeanManifests.Workplan
+end LeanEvidence.Workplan

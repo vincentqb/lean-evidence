@@ -2,7 +2,7 @@ module
 
 meta import Tests.Support
 import Tests.Assumptions
-public meta import LeanManifests.WorldClaim
+public meta import LeanEvidence.WorldClaim
 
 public section
 namespace Tests.Evidence
@@ -123,7 +123,7 @@ assert_evidence tested_alias is "DerivedConjecture"
 assert_assumptions tested_alias = [passing_samples]
 
 attribute [theorems headline clean] data
-rejects "no manifest evidence" in attribute [theorems headline_proof] data
+rejects "no registered evidence" in attribute [theorems headline_proof] data
 
 /-- An entry with an authored scheduling dependency. -/
 Sketch blocked

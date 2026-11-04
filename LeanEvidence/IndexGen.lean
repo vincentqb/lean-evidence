@@ -1,13 +1,13 @@
 module
 
-public meta import LeanManifests.Report
+public meta import LeanEvidence.Report
 
 public section
 meta section
 
 open Lean
 
-namespace LeanManifests.IndexGen
+namespace LeanEvidence.IndexGen
 
 structure ApiEntry where
   name : Name
@@ -45,7 +45,7 @@ private def claimLabel (env : Environment) (n : Name) : String :=
 def renderMarkdown (entries : Array ApiEntry) : CoreM String := do
   let env ← getEnv
   let mut lines := #[
-    "# API and manifest claims", "",
+    "# API and registered claims", "",
     "Annotations are author-supplied links. Mentions are occurrences in claim types.", ""
   ]
   for entry in entries do
@@ -63,4 +63,4 @@ def run (scope : Name) (outPath : System.FilePath) (imports : Array Import) : IO
     renderMarkdown (← buildIndex scope)
   IO.FS.writeFile outPath markdown
 
-end LeanManifests.IndexGen
+end LeanEvidence.IndexGen

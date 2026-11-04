@@ -7,7 +7,7 @@ meta section
 
 open Lean
 
-namespace LeanManifests.LatexRoundtrip
+namespace LeanEvidence.LatexRoundtrip
 
 structure Markers where
   thmRefs : Array String := #[]
@@ -38,11 +38,11 @@ private partial def scan (chars : List Char) (result : Markers) : Except String 
   | '\\' :: rest =>
     let (letters, remaining) := rest.span Char.isAlpha
     let command := String.ofList letters
-    if command == "manifestThm" || command == "manifestSym" then
+    if command == "evidenceThm" || command == "evidenceSym" then
       let (rawName, remaining) ← argument command remaining
       let name := rawName.trimAscii.toString
-      if name.isEmpty then throw s!"\\{command} has an empty manifest name"
-      if command == "manifestThm" then
+      if name.isEmpty then throw s!"\\{command} has an empty claim name"
+      if command == "evidenceThm" then
         scan remaining { result with thmRefs := result.thmRefs.push name }
       else
         let (symbol, remaining) ← argument command remaining
@@ -70,8 +70,8 @@ def check (text : String) (report : Json) : Except String Result := do
   let mut known : Std.HashSet String := {}
   for entry in entries do
     let name ← entry.getObjValAs? String "name"
-    if name.isEmpty then throw "The report contains an empty manifest name"
-    if known.contains name then throw s!"Duplicate manifest name in report: {name}"
+    if name.isEmpty then throw "The report contains an empty claim name"
+    if known.contains name then throw s!"Duplicate claim name in report: {name}"
     known := known.insert name
   let markers ← parseMarkers text
   let referenced := (markers.thmRefs ++ markers.symRefs.map Prod.fst).foldl
@@ -86,9 +86,9 @@ def run (texPath reportPath : System.FilePath) : IO Unit := do
   let text ← IO.FS.readFile texPath
   let report ← IO.ofExcept <| Json.parse (← IO.FS.readFile reportPath)
   let result ← IO.ofExcept <| check text report
-  IO.println s!"Resolved {result.resolved.size} manifest names; {result.unreferenced.size} report entries are unreferenced."
+  IO.println s!"Resolved {result.resolved.size} claim names; {result.unreferenced.size} report entries are unreferenced."
   unless result.unresolved.isEmpty do
-    throw <| IO.userError ("Unresolved manifest names: " ++
+    throw <| IO.userError ("Unresolved claim names: " ++
       String.intercalate ", " result.unresolved.toList)
 
-end LeanManifests.LatexRoundtrip
+end LeanEvidence.LatexRoundtrip

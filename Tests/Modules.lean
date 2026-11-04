@@ -1,7 +1,7 @@
 module
 
 meta import Tests.Support
-public import Examples.ConstantFolding.Manifest
+public import Examples.ConstantFolding.Contracts
 
 public section
 namespace Tests.Modules
@@ -19,7 +19,7 @@ rejects "Unknown identifier" in #check Examples.ConstantFolding.eval_fold
 rejects "rfl" in theorem cannot_unfold : eval (fun _ => 0) (.lit 4) = 4 := by rfl
 
 meta section
-open LeanManifests
+open LeanEvidence
 
 example (r : TestResults) :
     r.verdict = some .tested ↔ 0 < r.total ∧ r.passed = r.total :=

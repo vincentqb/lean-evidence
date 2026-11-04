@@ -1,14 +1,14 @@
 module
 
 meta import Tests.Support
-public meta import LeanManifests.Tools
-public meta import LeanManifests.Conformance
+public meta import LeanEvidence.Tools
+public meta import LeanEvidence.Conformance
 import Tests.Evidence
 
 public section
 meta section
 
-open Lean Elab Command LeanManifests
+open Lean Elab Command LeanEvidence
 
 namespace Tests.Reporting
 
@@ -57,13 +57,13 @@ run_cmd do
 
 run_cmd do
   let parsed ← IO.ofExcept <| LatexRoundtrip.parseMarkers
-    "é λ \\manifestThm{Tests.claim}\n% \\manifestThm{ignored}\n\
-    \\manifestSym {Tests.symbol}{x_{n}+\\{y\\}} \\manifestThmSuffix{ignored}"
+    "é λ \\evidenceThm{Tests.claim}\n% \\evidenceThm{ignored}\n\
+    \\evidenceSym {Tests.symbol}{x_{n}+\\{y\\}} \\evidenceThmSuffix{ignored}"
   unless parsed.thmRefs == #["Tests.claim"] &&
       parsed.symRefs == #[("Tests.symbol", "x_{n}+\\{y\\}")] do
     throwError "Unicode, comments, command boundaries, or nested groups broke marker parsing"
-  for malformed in ["\\manifestThm{}", "\\manifestThm{open", "\\manifestSym{x}",
-      "\\manifestThm x"] do
+  for malformed in ["\\evidenceThm{}", "\\evidenceThm{open", "\\evidenceSym{x}",
+      "\\evidenceThm x"] do
     match LatexRoundtrip.parseMarkers malformed with
     | .error _ => pure ()
     | .ok _ => throwError "Accepted malformed marker: {malformed}"
@@ -72,7 +72,7 @@ run_cmd do
     Json.mkObj [("name", Json.str "Tests.unreferenced")]
   ]
   let result ← IO.ofExcept <| LatexRoundtrip.check
-    "\\manifestThm{Tests.claim}\\manifestThm{Tests.claim}\\manifestThm{Tests.missing}" report
+    "\\evidenceThm{Tests.claim}\\evidenceThm{Tests.claim}\\evidenceThm{Tests.missing}" report
   unless result.resolved == #["Tests.claim"] && result.unresolved == #["Tests.missing"] &&
       result.unreferenced == #["Tests.unreferenced"] do
     throwError "Marker resolution must preserve missing and unreferenced names"
@@ -83,7 +83,7 @@ run_cmd do
     | .error _ => pure ()
     | .ok _ => throwError "Accepted a malformed report"
 
-open LeanManifests.Conformance
+open LeanEvidence.Conformance
 run_cmd do
   unless approxEq 1.0 1.00001 0.001 &&
       !approxEqArray #[1.0] #[1.0, 2.0] 0.001 &&

@@ -1,13 +1,13 @@
 module
 
-public meta import LeanManifests.Basic
+public meta import LeanEvidence.Basic
 
 public section
 meta section
 
 open Lean
 
-namespace LeanManifests.Report
+namespace LeanEvidence.Report
 
 structure Source where
   moduleName : Name
@@ -51,7 +51,7 @@ private def sourceLocation (n : Name) : CoreM (Option Source) := do
 def buildEntry (n : Name) : CoreM Entry := do
   let env ← getEnv
   let some evidence := getEvidence? env n
-    | throwError "{n} has no manifest evidence"
+    | throwError "{n} has no registered evidence"
   let info ← getConstInfo n
   if evidence.kind.requiresProof then requireProof n
   let axioms := (← collectAxioms n).qsort (fun a b => a.toString < b.toString)
@@ -108,12 +108,12 @@ def withEnvironment {α : Type} (imports : Array Import) (action : CoreM α) : I
   unsafe enableInitializersExecution
   let env ← importModules imports {} (loadExts := true) (level := .server)
   let (result, _) ← action.toIO
-    { fileName := "<manifest-report>", fileMap := default } { env }
+    { fileName := "<evidence-report>", fileMap := default } { env }
   return result
 
 def run (scope : Name) (outPath : System.FilePath) (imports : Array Import) : IO Unit := do
   let entries ← withEnvironment imports (collectEntries scope)
   IO.FS.writeFile outPath (Json.arr (entries.map entryToJson)).pretty
-  IO.println s!"Wrote {entries.size} manifest entries to {outPath}"
+  IO.println s!"Wrote {entries.size} evidence entries to {outPath}"
 
-end LeanManifests.Report
+end LeanEvidence.Report

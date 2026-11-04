@@ -3,7 +3,7 @@ module
 public import Examples.ConstantFolding.Defs
 import all Examples.ConstantFolding.Defs
 import Std.Tactic
-public meta import LeanManifests
+public meta import LeanEvidence
 
 public section
 

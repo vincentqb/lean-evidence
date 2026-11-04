@@ -1,3 +1,3 @@
 module
 
-public import Examples.ConstantFolding.Manifest
+public import Examples.ConstantFolding.Contracts

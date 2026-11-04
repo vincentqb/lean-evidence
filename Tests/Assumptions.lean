@@ -1,6 +1,6 @@
 module
 
-public meta import LeanManifests.Basic
+public meta import LeanEvidence.Basic
 
 public section
 namespace Tests.Assumptions

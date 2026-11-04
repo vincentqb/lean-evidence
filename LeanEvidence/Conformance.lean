@@ -1,7 +1,7 @@
 module
 
 public section
-namespace LeanManifests.Conformance
+namespace LeanEvidence.Conformance
 
 @[expose] def approxEq (a b : Float) (tolerance : Float := 1e-10) : Bool :=
   (a - b).abs < tolerance
@@ -16,4 +16,4 @@ namespace LeanManifests.Conformance
 @[expose] def rowMultisetEq (a b : Array String) : Bool :=
   a.qsort (· < ·) == b.qsort (· < ·)
 
-end LeanManifests.Conformance
+end LeanEvidence.Conformance

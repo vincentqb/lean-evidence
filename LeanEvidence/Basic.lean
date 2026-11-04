@@ -1,13 +1,13 @@
 module
 
-public meta import LeanManifests.Attr
+public meta import LeanEvidence.Attr
 
 public section
 meta section
 
 open Lean Elab Command
 
-namespace LeanManifests
+namespace LeanEvidence
 
 structure TestResults where
   passed : Nat := 0
@@ -168,4 +168,4 @@ elab doc?:(docComment)? "ConformanceFixture " n:ident " : " t:term : command => 
   mark name .fixture
   attachDoc doc? name
 
-end LeanManifests
+end LeanEvidence

@@ -1,7 +1,7 @@
 module
 
-public meta import LeanManifests.Report
-import all LeanManifests.Report
+public meta import LeanEvidence.Report
+import all LeanEvidence.Report
 import all Lean.Data.Json.Basic
 import all Lean.Data.Json.FromToJson.Basic
 import Std.Data.TreeMap.Raw.Lemmas
@@ -11,7 +11,7 @@ meta section
 
 open Lean
 
-namespace LeanManifests.Contracts
+namespace LeanEvidence.Contracts
 
 private theorem object_field (fields : List (String × Json)) (key : String) (value : Json)
     (distinct : fields.Pairwise (fun a b => compare a.1 b.1 ≠ .eq))
@@ -70,4 +70,4 @@ ProvenTheorem report_no_tests : ∀ e : Report.Entry,
 
 attribute [theorems report_evidence report_tests report_no_tests] Report.entryToJson
 
-end LeanManifests.Contracts
+end LeanEvidence.Contracts

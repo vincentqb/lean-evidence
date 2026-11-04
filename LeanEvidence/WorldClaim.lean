@@ -1,11 +1,11 @@
 module
 
-public meta import LeanManifests.Basic
+public meta import LeanEvidence.Basic
 
 public section
 meta section
 
-namespace LeanManifests
+namespace LeanEvidence
 open Lean Elab Command Internal
 
 syntax (name := worldClaimSyn)
@@ -23,4 +23,4 @@ def elabWorldClaim : CommandElab := fun stx => do
     attachDoc doc? name
   | _ => throwUnsupportedSyntax
 
-end LeanManifests
+end LeanEvidence

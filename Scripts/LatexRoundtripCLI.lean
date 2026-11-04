@@ -1,6 +1,6 @@
 module
 
-public meta import LeanManifests.LatexRoundtrip
+public meta import LeanEvidence.LatexRoundtrip
 
 public section
 meta section
@@ -9,7 +9,7 @@ def main (args : List String) : IO UInt32 := do
   match args with
   | [texFile, jsonFile] =>
     try
-      LeanManifests.LatexRoundtrip.run texFile jsonFile
+      LeanEvidence.LatexRoundtrip.run texFile jsonFile
       return 0
     catch error =>
       IO.eprintln error
