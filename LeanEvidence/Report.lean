@@ -109,7 +109,10 @@ def withEnvironment {α : Type} (imports : Array Import) (action : CoreM α) : I
   if imports.isEmpty then throw <| IO.userError "Supply at least one compiled module to report on"
   initSearchPath (← findSysroot)
   unsafe enableInitializersExecution
-  let env ← importModules imports {} (loadExts := true) (level := .server)
+  let imports := imports.map ({ · with importAll := true })
+  let env ← withImporting do
+    let (_, state) ← (importModulesCore imports).run
+    finalizeImport state imports {} (leakEnv := false) (loadExts := true) (isModule := true)
   let (result, _) ← action.toIO
     { fileName := "<evidence-report>", fileMap := default } { env }
   return result

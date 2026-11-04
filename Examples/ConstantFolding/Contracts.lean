@@ -10,7 +10,8 @@ public section
 namespace Examples.ConstantFolding
 
 ProvenTheorem eval_sound :
-    ∀ (env : Nat → Nat) (e : Expr), Evaluates env e (eval env e) :=
+    LeanEvidence.Contract eval (fun evaluate =>
+      ∀ (env : Nat → Nat) (e : Expr), Evaluates env e (evaluate env e)) :=
   by
     intro env e
     induction e with
@@ -42,8 +43,9 @@ private theorem semantics_iff (env : Nat → Nat) (e : Expr) (v : Nat) :
     exact eval_sound env e
 
 ProvenTheorem fold_preserves_meaning :
+    LeanEvidence.Contract fold (fun optimize =>
     ∀ (env : Nat → Nat) (e : Expr) (v : Nat),
-      Evaluates env (fold e) v ↔ Evaluates env e v :=
+      Evaluates env (optimize e) v ↔ Evaluates env e v) :=
   by
     intro env e v
     rw [semantics_iff, semantics_iff, eval_fold]
@@ -61,7 +63,8 @@ private theorem combine_size (a b : Expr) :
     nodeCount (combine a b) ≤ 1 + nodeCount a + nodeCount b := by
   cases a <;> cases b <;> simp [combine, nodeCount] <;> omega
 
-ProvenTheorem fold_never_grows : ∀ (e : Expr), nodeCount (fold e) ≤ nodeCount e :=
+ProvenTheorem fold_never_grows : LeanEvidence.Contract nodeCount (fun size =>
+    ∀ (e : Expr), size (fold e) ≤ size e) :=
   by
     intro e
     induction e with

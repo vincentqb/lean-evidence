@@ -1,24 +1,38 @@
 module
 
-public meta import LeanEvidence.Report
+public meta import LeanEvidence
+public meta import Examples
 
 public section
 meta section
 
 open Lean LeanEvidence
 
-namespace Scripts.Audit
+namespace LeanEvidenceAudit
 
-def run : IO Unit := do
-  let imports : Array Import := #[
-    { module := `LeanEvidence },
-    { module := `LeanEvidence.Report },
-    { module := `Examples }
+def project : Project := {
+  modules := #[
+    ⟨`LeanEvidence, .core⟩,
+    ⟨`LeanEvidence.Evidence, .core⟩,
+    ⟨`LeanEvidence.Policy, .core⟩,
+    ⟨`LeanEvidence.Commands, .tooling⟩,
+    ⟨`LeanEvidence.Contracts, .tooling⟩,
+    ⟨`LeanEvidence.Report, .tooling⟩,
+    ⟨`LeanEvidence.Audit, .tooling⟩,
+    ⟨`Examples, .core⟩,
+    ⟨`Examples.ConstantFolding.Defs, .core⟩,
+    ⟨`Examples.ConstantFolding.Contracts, .core⟩,
+    ⟨`LeanEvidenceAudit, .tooling⟩
   ]
-  let (contracts, examples) ← Report.withEnvironment imports do
+}
+
+def run (catalog : Array Name) : IO Unit := do
+  let inventory ← Audit.inspect project catalog
+  let (contracts, examples) ← Report.withEnvironment #[{ module := `LeanEvidence.Contracts },
+      { module := `LeanEvidence.Report }, { module := `Examples }] do
     return (← Report.collectEntries `LeanEvidence.Contracts,
       ← Report.collectEntries `Examples.ConstantFolding)
-  unless contracts.size == 12 && contracts.all (fun e =>
+  unless !contracts.isEmpty && contracts.all (fun e =>
       e.evidence.kind == .proven && e.evidence.isComplete &&
       !e.evidence.ownHole && e.evidence.assumptions.isEmpty &&
       e.axioms.all standardAxioms.contains && e.source.isSome) do
@@ -36,8 +50,10 @@ def run : IO Unit := do
   let reread ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
   unless reread == report do
     throw <| IO.userError "Writing and parsing the JSON report changed its evidence"
-  IO.println s!"Checked 12 library contract proofs, 5 example proofs, and 2 finite tests; report: {path}"
+  IO.println s!"Checked {inventory.modules.size} modules, {inventory.declarations.size} declarations, \
+    {contracts.size} library proofs, 5 example proofs, and 2 finite tests; report: {path}"
 
-end Scripts.Audit
+end LeanEvidenceAudit
 
-def main : IO Unit := Scripts.Audit.run
+def main (args : List String) : IO Unit :=
+  LeanEvidenceAudit.run (args.toArray.map String.toName)
