@@ -1,92 +1,94 @@
-import LeanManifests.Basic
-import LeanManifests.Defs.Manifests.MacroContracts
-import LeanManifests.Proofs.Manifests.MacroContracts
+module
 
-/-! # Macro Contracts — what our manifest system guarantees
+public meta import LeanManifests.Basic
+import all LeanManifests.Attr
+import all LeanManifests.Basic
 
-  Vocabulary in Defs/Manifests/MacroContracts.lean (13 specs).
-  Derivations in Proofs/Manifests/MacroContracts.lean.
+public section
+meta section
 
-  11 macros. 7 cross-cutting properties. All specified.
--/
+open Lean
 
-open Lean LeanEnvironment
+namespace LeanManifests.Contracts
 
--- ════════════════════════════════════════════════════════════
--- § Evidence macros
--- ════════════════════════════════════════════════════════════
+ProvenTheorem standard_axioms_iff : ∀ axioms : Array Name,
+    (nonstandardAxioms axioms).isEmpty = true ↔
+      ∀ ax ∈ axioms, ax = ``propext ∨ ax = ``Classical.choice ∨ ax = ``Quot.sound := by
+  intro axioms
+  simp [nonstandardAxioms, Array.isEmpty_iff, standardAxioms, Decidable.or_iff_not_imp_left]
 
-DerivedConjecture ProvenTheorem_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    ProvenTheoremSpec env n t
+ProvenTheorem assumption_names_iff : ∀ (e : Evidence) (n ax : Name),
+    ax ∈ e.assumptionNames n ↔
+      (e.ownHole = true ∧ ax = n) ∨ (e.ownHole = false ∧ ax ∈ e.assumptions) := by
+  intro e n ax
+  cases h : e.ownHole <;> simp [Evidence.assumptionNames, h]
 
-DerivedConjecture TestedConjecture_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    TestedConjectureSpec env n t
+ProvenTheorem receipt_counts : ∀ (initial : TestResults) (attempts : List Bool),
+    let results := attempts.foldl (fun r passed => r.merge (TestResults.ofResult passed)) initial
+    results.total = initial.total + attempts.length ∧
+      results.passed = initial.passed + (attempts.filter id).length := by
+  intro initial attempts
+  induction attempts generalizing initial with
+  | nil => simp
+  | cons passed attempts ih =>
+    have h := ih (initial.merge (TestResults.ofResult passed))
+    simp only [List.foldl_cons]
+    constructor
+    · rw [h.1]
+      simp [TestResults.merge, TestResults.ofResult, Nat.add_assoc] <;> omega
+    · rw [h.2]
+      cases passed <;> simp [TestResults.merge, TestResults.ofResult, Nat.add_assoc] <;> omega
 
-DerivedConjecture FailingConjecture_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr) (passed total : Nat),
-    FailingConjectureSpec env n t passed total
+ProvenTheorem merge_preserves_bounds : ∀ (a b : TestResults),
+    a.passed ≤ a.total → b.passed ≤ b.total →
+      (a.merge b).passed ≤ (a.merge b).total := by
+  intro a b ha hb
+  simp only [TestResults.merge]
+  omega
 
-DerivedConjecture TestMacro_is_correct :
-    ∀ (env : Environment) (n : Name) (idx : Nat),
-    TestMacroSpec env n idx
+ProvenTheorem tested_iff : ∀ r : TestResults,
+    r.verdict = some .tested ↔ 0 < r.total ∧ r.passed = r.total := by
+  intro r
+  by_cases zero : r.total = 0 <;> by_cases passed : r.passed = r.total <;>
+    simp [TestResults.verdict, zero, passed] <;> omega
 
-DerivedConjecture UnprovenConjecture_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    UnprovenConjectureSpec env n t
+ProvenTheorem failing_iff : ∀ r : TestResults,
+    r.verdict = some .failing ↔ 0 < r.total ∧ r.passed ≠ r.total := by
+  intro r
+  by_cases zero : r.total = 0 <;> by_cases passed : r.passed = r.total <;>
+    simp [TestResults.verdict, zero, passed] <;> omega
 
-DerivedConjecture DecomposedConjecture_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    DecomposedConjectureSpec env n t
+ProvenTheorem proof_required_iff : ∀ kind : EvidenceKind,
+    kind.requiresProof = true ↔ kind = .proven ∨ kind = .unitTest := by
+  intro kind
+  cases kind <;> simp [EvidenceKind.requiresProof]
 
-DerivedConjecture DerivedConjecture_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    DerivedConjectureSpec env n t
+ProvenTheorem complete_iff : ∀ e : Evidence,
+    e.isComplete = true ↔ e.kind = .proven ∨ e.kind = .unitTest ∨
+      (e.kind = .derived ∧ e.assumptions = #[]) := by
+  intro e
+  cases e with
+  | mk kind assumptions ownHole =>
+    cases kind <;> simp [Evidence.isComplete, EvidenceKind.requiresProof, Array.isEmpty_iff]
 
--- ════════════════════════════════════════════════════════════
--- § Other macros
--- ════════════════════════════════════════════════════════════
+ProvenTheorem unfinished_incomplete : ∀ e : Evidence,
+    e.needsWork = true → e.isComplete = false := by
+  intro e
+  cases e with
+  | mk kind assumptions ownHole =>
+    cases kind <;> simp [Evidence.needsWork, Evidence.isComplete, EvidenceKind.requiresProof]
 
-DerivedConjecture Signature_is_correct :
-    ∀ (envBefore envAfter : Environment) (n : Name) (t : Expr),
-    SignatureSpec envBefore envAfter n t
+ProvenTheorem evidence_labels_injective : ∀ (a b : EvidenceKind),
+    toString a = toString b ↔ a = b := by
+  intro a b
+  cases a <;> cases b <;> simp [toString]
 
-DerivedConjecture FastHeader_is_correct :
-    ∀ (envAfter : Environment) (n : Name) (t : Expr),
-    FastHeaderSpec envAfter n t
+attribute [theorems standard_axioms_iff] nonstandardAxioms
+attribute [theorems assumption_names_iff] Evidence.assumptionNames
+attribute [theorems receipt_counts merge_preserves_bounds] TestResults.merge
+attribute [theorems tested_iff failing_iff] TestResults.verdict
+attribute [theorems proof_required_iff] EvidenceKind.requiresProof
+attribute [theorems complete_iff] Evidence.isComplete
+attribute [theorems unfinished_incomplete] Evidence.needsWork
 
-DerivedConjecture VerifyAxiom_is_correct :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    VerifyAxiomSpec env n t
-
-DerivedConjecture Wrap_is_correct :
-    ∀ (envAfter : Environment) (n target : Name),
-    WrapSpec envAfter n target
-
--- ════════════════════════════════════════════════════════════
--- § Cross-cutting properties
--- ════════════════════════════════════════════════════════════
-
-DerivedConjecture evidence_levels_are_distinguishable :
-    ∀ (env : Environment), EvidenceOrderingInvariant env
-
-DerivedConjecture strict_ordering :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    StrictOrderingSpec env n t
-
-DerivedConjecture redundancy_works :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    RedundancySpec env n t
-
-DerivedConjecture fast_mode_works :
-    ∀ (envAfter : Environment) (n : Name) (t : Expr),
-    FastModeSpec envAfter n t
-
-DerivedConjecture promotion_works :
-    ∀ (env : Environment) (n : Name) (t : Expr),
-    PromotionSpec env n t
-
-DerivedConjecture vacuous_test_detected :
-    ∀ (env : Environment) (n : Name),
-    VacuousTestSpec env n
+end LeanManifests.Contracts

@@ -1,176 +1,178 @@
-import Lean
+module
 
-/-! # Manifest entry attribute
+public meta import Lean
 
-  The `@[manifest_entry]` attribute marks a declaration as a
-  well-behaved conjecture — something declared through one of the
-  evidence-hierarchy macros (`UnprovenConjecture`, `TestedConjecture`,
-  `DecomposedConjecture`, `DerivedConjecture`, `ProvenTheorem`) in a
-  manifest file.
-
-  The enforcement rule: when `DerivedConjecture foo` or
-  `DecomposedConjecture foo` is elaborated, every sorry-bearing
-  dependency of `foo_derivation` must carry this attribute. A stray
-  `theorem x : P := by sorry` sitting in a proof file is not a
-  manifest entry, so using it in a derivation is a compile-time error.
-
-  This distinguishes the five "less-apologetic sorrys" of the evidence
-  hierarchy from Lean's built-in raw `sorry`. The trust report emitted
-  by `DerivedConjecture` is therefore complete: every named dependency
-  is a declared manifest entry with a known evidence level, not a
-  hidden hole.
-
-  The attribute is applied automatically by the macros in `Basic.lean`.
-  Users never write `@[manifest_entry]` by hand.
--/
+public section
+meta section
 
 open Lean
 
-initialize manifestEntryAttr : TagAttribute ←
-  registerTagAttribute `manifest_entry
-    "marks a declaration as an evidence-hierarchy conjecture entry"
+namespace LeanManifests
 
-/-- True iff `n` is tagged with `@[manifest_entry]`. -/
-def hasManifestEntryAttr (env : Environment) (n : Name) : Bool :=
-  manifestEntryAttr.hasTag env n
+inductive EvidenceKind where
+  | proven | derived | unproven | tested | failing | sketch | world | unitTest | fixture
+  deriving BEq, ReflBEq, LawfulBEq, Inhabited, Repr
 
-/-- The `@[manifest_axiom]` attribute marks a declaration as a permanent
-    environmental assumption — an axiom we explicitly accept and don't
-    expect to ever prove (OS behavior, network reality, hardware semantics,
-    source-structure claims).
+instance : ToString EvidenceKind where
+  toString
+    | .proven => "ProvenTheorem"
+    | .derived => "DerivedConjecture"
+    | .unproven => "UnprovenConjecture"
+    | .tested => "TestedConjecture"
+    | .failing => "FailingConjecture"
+    | .sketch => "Sketch"
+    | .world => "WorldClaim"
+    | .unitTest => "UnitTest"
+    | .fixture => "ConformanceFixture"
 
-    Contrast with plain `@[manifest_entry]` UnprovenConjectures, which are
-    holes we intend to close eventually.
+def EvidenceKind.requiresProof : EvidenceKind → Bool
+  | .proven | .unitTest => true
+  | _ => false
 
-    In a trust report:
-    - ManifestAxiom deps → "fully attested" (as proven as it can be)
-    - UnprovenConjecture deps → "partial" (has TODOs) -/
-initialize manifestAxiomAttr : TagAttribute ←
-  registerTagAttribute `manifest_axiom
-    "marks a declaration as a permanent environmental assumption (ManifestAxiom)"
+structure Evidence where
+  kind : EvidenceKind
+  assumptions : Array Name := #[]
+  ownHole : Bool := false
+  deriving Inhabited, Repr
 
-/-- True iff `n` is tagged with `@[manifest_axiom]`. -/
-def hasManifestAxiomAttr (env : Environment) (n : Name) : Bool :=
-  manifestAxiomAttr.hasTag env n
+def Evidence.assumptionNames (e : Evidence) (n : Name) : Array Name :=
+  if e.ownHole then #[n] else e.assumptions
 
-/-- Attribute marking which theorems describe a function's behavior.
-    Usage: `@[theorems thm1, thm2, thm3] def foo := ...`
-    The theorems must be ProvenTheorem / TestedConjecture / DerivedConjecture
-    that mention `foo` in their statement. -/
-syntax (name := theoremsAttr) "theorems" (ident,*) : attr
+def Evidence.isComplete (e : Evidence) : Bool :=
+  e.kind.requiresProof || (e.kind == .derived && e.assumptions.isEmpty)
 
-initialize theoremsExtension : ParametricAttribute (Array Name) ←
-  registerParametricAttribute {
-    name := `theoremsAttr
-    descr := "links a function to theorems that describe its behavior"
-    getParam := fun _name stx => match stx with
-      | `(attr| theorems $thms,*) => return thms.getElems.map (·.getId)
-      | _ => Lean.throwError "invalid theorems attribute"
+def Evidence.needsWork (e : Evidence) : Bool :=
+  match e.kind with
+  | .sketch | .unproven | .tested | .failing => true
+  | .derived => !e.assumptions.isEmpty
+  | _ => false
+
+initialize evidenceExt : SimplePersistentEnvExtension (Name × Evidence)
+    (Std.HashMap Name Evidence) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun m (n, e) => m.insert n e
+    addImportedFn := fun entries => Id.run do
+      let mut m := {}
+      for a in entries do
+        for (n, e) in a do m := m.insert n e
+      return m
   }
 
-/-- Get the theorem names associated with a function via `@[theorems ...]`, if any. -/
+def getEvidence? (env : Environment) (n : Name) : Option Evidence :=
+  (evidenceExt.getState env)[n]?
+
+def standardAxioms : Array Name := #[``propext, ``Classical.choice, ``Quot.sound]
+
+def nonstandardAxioms (axioms : Array Name) : Array Name :=
+  axioms.filter (!standardAxioms.contains ·)
+
+def unexpectedAxioms (n : Name) : CoreM (Array Name) := do
+  return nonstandardAxioms (← collectAxioms n)
+
+def requireProof (n : Name) : CoreM Unit := do
+  let axioms ← unexpectedAxioms n
+  unless axioms.isEmpty do
+    throwError "{n} depends on nonstandard axioms: {axioms}. A proved entry may use only propext, Classical.choice, and Quot.sound."
+
+def namedAssumptions (root : Name) : CoreM (Array Name) := do
+  let env := (← getEnv).setExporting false
+  let axioms ← unexpectedAxioms root
+  for ax in axioms do
+    unless ax == ``sorryAx do
+      throwError "{root} depends on an unregistered axiom: {ax}"
+  let mut todo := #[root]
+  let mut visited : NameSet := {}
+  let mut frontier : Array Name := #[]
+  while !todo.isEmpty do
+    let n := todo.back!
+    todo := todo.pop
+    if visited.contains n then continue
+    visited := visited.insert n
+    if (← unexpectedAxioms n).isEmpty then continue
+    if let some e := getEvidence? env n then
+      let assumptions := e.assumptionNames n
+      if !assumptions.isEmpty then
+        for dep in assumptions do
+          if !frontier.contains dep then frontier := frontier.push dep
+        continue
+    let some info := env.find? n
+      | throwError "Cannot inspect the assumed dependency {n}"
+    let deps := info.getUsedConstantsAsSet
+    if deps.contains ``sorryAx then
+      throwError "{root} uses raw sorry in {n}; declare the assumption in a manifest."
+    unless (info.value? (allowOpaque := true)).isSome do
+      throwError "Cannot name assumptions behind the hidden body of {n}. Use import all for this package's proof module."
+    for dep in deps.toArray do todo := todo.push dep
+  if !axioms.isEmpty && frontier.isEmpty then
+    throwError "Cannot recover the named assumptions of {root}"
+  return frontier.qsort (fun a b => a.toString < b.toString)
+
+syntax (name := theoremsAttr) "theorems" ident+ : attr
+
+initialize theoremsExtension : SimplePersistentEnvExtension (Name × Array Name)
+    (Std.HashMap Name (Array Name)) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun m (n, claims) => m.insert n claims
+    addImportedFn := fun entries => Id.run do
+      let mut m := {}
+      for a in entries do
+        for (n, claims) in a do
+          let previous := (m[n]?).getD #[]
+          m := m.insert n (claims.foldl
+            (fun acc claim => if acc.contains claim then acc else acc.push claim) previous)
+      return m
+  }
+
+initialize registerBuiltinAttribute {
+    name := `theoremsAttr
+    descr := "author-supplied links from an API declaration to manifest claims"
+    add := fun n stx kind => do
+      unless kind == .global do throwError "theorems requires a global attribute"
+      let claims ← match stx with
+        | `(attr| theorems $ns:ident*) => ns.mapM resolveGlobalConstNoOverload
+        | _ => throwError "invalid theorems attribute"
+      for claim in claims do
+        unless (getEvidence? (← getEnv) claim).isSome do
+          throwError "{claim} has no manifest evidence"
+      let previous := ((theoremsExtension.getState (← getEnv))[n]?).getD #[]
+      let merged := claims.foldl
+        (fun acc claim => if acc.contains claim then acc else acc.push claim) previous
+      modifyEnv fun env => theoremsExtension.addEntry env (n, merged)
+  }
+
 def getTheorems? (env : Environment) (n : Name) : Option (Array Name) :=
-  theoremsExtension.getParam? env n
+  (theoremsExtension.getState env)[n]?
 
-/-! # Work-plan metadata for UnprovenConjecture
-
-  Three optional attributes that decorate `UnprovenConjecture` entries
-  with information useful while the work is in progress:
-
-    `@[depends_on  foo, bar, baz]`    — names of conjectures this depends on
-    `@[estimated_minutes 60]`         — rough effort estimate
-    `@[entry_point]`                  — yes-no flag: independently approachable
-
-  These attribute decls are stripped on promotion to TestedConjecture /
-  ProvenTheorem (work is done; metadata becomes noise).
-
-  Used by Scripts/workplan.lean (in user libraries) to enumerate
-  ready-to-start work for an agent picking up tasks.
-
-  Used by the macros' promotion gate: a TestedConjecture or
-  ProvenTheorem cannot reference an UnprovenConjecture in its
-  `depends_on` list (would fail to type-check the promotion).
--/
-
-/-- `@[depends_on x, y, z]` — declare manifest dependencies. -/
-syntax (name := dependsOnAttr) "depends_on" (ident,*) : attr
-
+syntax (name := dependsOnAttr) "depends_on" ident+ : attr
 initialize dependsOnExtension : ParametricAttribute (Array Name) ←
   registerParametricAttribute {
     name := `dependsOnAttr
-    descr := "names of UnprovenConjecture entries this work depends on"
-    getParam := fun _name stx => match stx with
-      | `(attr| depends_on $deps,*) => return deps.getElems.map (·.getId)
-      | _ => Lean.throwError "invalid depends_on attribute"
+    descr := "author-supplied work dependencies; not proof dependencies"
+    getParam := fun _ stx => match stx with
+      | `(attr| depends_on $ns:ident*) => ns.mapM resolveGlobalConstNoOverload
+      | _ => throwError "invalid depends_on attribute"
   }
 
-/-- Get the manifest dependencies of `n`, if any. -/
 def getDependsOn? (env : Environment) (n : Name) : Option (Array Name) :=
   dependsOnExtension.getParam? env n
 
-/-- `@[estimated_minutes 60]` — rough effort estimate. -/
 syntax (name := estimatedMinutesAttr) "estimated_minutes" num : attr
-
 initialize estimatedMinutesExtension : ParametricAttribute Nat ←
   registerParametricAttribute {
     name := `estimatedMinutesAttr
-    descr := "rough work estimate in minutes"
-    getParam := fun _name stx => match stx with
+    descr := "author-supplied effort estimate in minutes"
+    getParam := fun _ stx => match stx with
       | `(attr| estimated_minutes $n) => return n.getNat
-      | _ => Lean.throwError "invalid estimated_minutes attribute"
+      | _ => throwError "invalid estimated_minutes attribute"
   }
 
-/-- Get the time estimate for `n`, if any. -/
 def getEstimatedMinutes? (env : Environment) (n : Name) : Option Nat :=
   estimatedMinutesExtension.getParam? env n
 
-/-- `@[entry_point]` — flag that this conjecture is independently
-    approachable (no unmet dependencies, good for a fresh agent). -/
 initialize entryPointAttr : TagAttribute ←
-  registerTagAttribute `entry_point
-    "marks an UnprovenConjecture as independently approachable"
+  registerTagAttribute `entry_point "author-supplied work entry point"
 
-/-- True iff `n` is tagged with `@[entry_point]`. -/
 def isEntryPoint (env : Environment) (n : Name) : Bool :=
   entryPointAttr.hasTag env n
 
-/-! # Sketch attribute
-
-  The `@[sketch]` attribute marks a `def n : Unit := ()` declaration
-  produced by the `Sketch` macro. A Sketch is a *name-grabber for
-  prose* — used when we know the shape of a future conjecture but
-  don't yet have the language or definitions to phrase the Prop.
-
-  Sketches are not theorems and do not pretend to be. The trust
-  report classifies them separately:
-
-    proven       (●)  ProvenTheorem with kernel-checked proof
-    derived      (◕)  DerivedConjecture proven modulo axioms
-    world claim  (◆)  WorldClaim with falsifying observation
-    tested       (◐)  TestedConjecture with passing tests
-    unproven     (○)  UnprovenConjecture: TODO with target Prop
-    sketch       (◌)  Sketch: signature + prose, no Prop yet
-
-  A Sketch is one phase before UnprovenConjecture. The lifecycle:
-
-    Sketch (signature + prose, no Prop)
-       ↓ when language/definitions exist to phrase it
-    UnprovenConjecture (Prop + prose, no proof)
-       ↓ when a proof exists
-    ProvenTheorem (Prop + proof)
-
-  Sketches are deliberately easier to write than `UnprovenConjecture`
-  — no Prop is required. They're intentionally NOT a synonym for
-  `UnprovenConjecture : True`; they're an honest acknowledgment that
-  the formal claim hasn't yet been phrased. -/
-initialize sketchAttr : TagAttribute ←
-  registerTagAttribute `sketch
-    "marks a declaration as a Sketch (name + prose, no Prop)"
-
-/-- True iff `n` is tagged with `@[sketch]`. -/
-def hasSketchAttr (env : Environment) (n : Name) : Bool :=
-  sketchAttr.hasTag env n
-
-/-- Names of all `@[sketch]`-tagged declarations. -/
-def sketchNames (env : Environment) : Array Name :=
-  sketchAttr.ext.getState env |>.toArray
+end LeanManifests
