@@ -1,6 +1,6 @@
 module
 
-public meta import LeanEvidence.Basic
+public meta import LeanEvidence.Commands
 
 public section
 meta section

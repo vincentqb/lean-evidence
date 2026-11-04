@@ -78,7 +78,4 @@ UnitTest fold_nested_literals :
 UnitTest fold_with_variable :
     fold (.add (.var 0) (.add (.lit 3) (.lit 4))) = .add (.var 0) (.lit 7)
 
-attribute [theorems eval_sound eval_complete] eval
-attribute [theorems fold_preserves_meaning fold_idempotent fold_never_grows] fold
-
 end Examples.ConstantFolding

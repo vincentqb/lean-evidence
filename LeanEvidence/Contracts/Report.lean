@@ -68,6 +68,4 @@ ProvenTheorem report_no_tests : ∀ e : Report.Entry,
   · simp [List.pairwise_cons]
   · simp [tests]
 
-attribute [theorems report_evidence report_tests report_no_tests] Report.entryToJson
-
 end LeanEvidence.Contracts

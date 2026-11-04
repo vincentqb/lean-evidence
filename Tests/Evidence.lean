@@ -2,7 +2,7 @@ module
 
 meta import Tests.Support
 import Tests.Assumptions
-public meta import LeanEvidence.WorldClaim
+public meta import LeanEvidence.Commands
 
 public section
 namespace Tests.Evidence
@@ -121,13 +121,6 @@ assert_assumptions conditional_alias = [Tests.Assumptions.input]
 DerivedConjecture tested_alias : ∀ n : Nat, n + 0 = n := passing_samples
 assert_evidence tested_alias is "DerivedConjecture"
 assert_assumptions tested_alias = [passing_samples]
-
-attribute [theorems headline clean] data
-rejects "no registered evidence" in attribute [theorems headline_proof] data
-
-/-- An entry with an authored scheduling dependency. -/
-Sketch blocked
-attribute [depends_on future headline, estimated_minutes 15, entry_point] blocked
 
 namespace Nested
 

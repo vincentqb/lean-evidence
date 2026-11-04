@@ -1,6 +1,6 @@
 module
 
-public meta import LeanEvidence.Attr
+public meta import LeanEvidence.Evidence
 
 public section
 meta section
@@ -8,39 +8,6 @@ meta section
 open Lean Elab Command
 
 namespace LeanEvidence
-
-structure TestResults where
-  passed : Nat := 0
-  total : Nat := 0
-  deriving Inhabited, Repr
-
-def TestResults.ofResult (passed : Bool) : TestResults :=
-  { passed := if passed then 1 else 0, total := 1 }
-
-def TestResults.merge (a b : TestResults) : TestResults :=
-  { passed := a.passed + b.passed, total := a.total + b.total }
-
-def TestResults.verdict (r : TestResults) : Option EvidenceKind :=
-  if r.total == 0 then none
-  else some (if r.passed == r.total then .tested else .failing)
-
-initialize testResultsExt : SimplePersistentEnvExtension (Name × TestResults)
-    (Std.HashMap Name TestResults) ←
-  registerSimplePersistentEnvExtension {
-    addEntryFn := fun m (n, r) =>
-      let p := (m[n]?).getD {}
-      m.insert n (p.merge r)
-    addImportedFn := fun entries => Id.run do
-      let mut m : Std.HashMap Name TestResults := {}
-      for a in entries do
-        for (n, r) in a do
-          let p := (m[n]?).getD {}
-          m := m.insert n (p.merge r)
-      return m
-  }
-
-def getTestResults (env : Environment) (n : Name) : Option TestResults :=
-  (testResultsExt.getState env)[n]?
 
 namespace Internal
 
@@ -152,6 +119,14 @@ elab doc?:(docComment)? "Sketch " n:ident : command => do
   checkedCommand (← `(public def $n : Unit := ()))
   let name ← fullName n
   mark name .sketch
+  attachDoc doc? name
+
+elab doc?:(docComment)? "WorldClaim " n:ident " := " t:term : command => do
+  unless doc?.isSome do
+    throwError "WorldClaim {n} requires a doc comment describing the assumption and a falsifying observation"
+  checkedCommand (← `(@[expose] public def $n : Prop := $t))
+  let name ← fullName n
+  mark name .world
   attachDoc doc? name
 
 elab doc?:(docComment)? "UnitTest " n:ident " : " t:term : command => do

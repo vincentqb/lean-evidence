@@ -1,8 +1,7 @@
 module
 
-public meta import LeanEvidence.Basic
-import all LeanEvidence.Attr
-import all LeanEvidence.Basic
+public meta import LeanEvidence.Commands
+import all LeanEvidence.Evidence
 
 public section
 meta section
@@ -71,24 +70,9 @@ ProvenTheorem complete_iff : ∀ e : Evidence,
   | mk kind assumptions ownHole =>
     cases kind <;> simp [Evidence.isComplete, EvidenceKind.requiresProof, Array.isEmpty_iff]
 
-ProvenTheorem unfinished_incomplete : ∀ e : Evidence,
-    e.needsWork = true → e.isComplete = false := by
-  intro e
-  cases e with
-  | mk kind assumptions ownHole =>
-    cases kind <;> simp [Evidence.needsWork, Evidence.isComplete, EvidenceKind.requiresProof]
-
 ProvenTheorem evidence_labels_injective : ∀ (a b : EvidenceKind),
     toString a = toString b ↔ a = b := by
   intro a b
   cases a <;> cases b <;> simp [toString]
-
-attribute [theorems standard_axioms_iff] nonstandardAxioms
-attribute [theorems assumption_names_iff] Evidence.assumptionNames
-attribute [theorems receipt_counts merge_preserves_bounds] TestResults.merge
-attribute [theorems tested_iff failing_iff] TestResults.verdict
-attribute [theorems proof_required_iff] EvidenceKind.requiresProof
-attribute [theorems complete_iff] Evidence.isComplete
-attribute [theorems unfinished_incomplete] Evidence.needsWork
 
 end LeanEvidence.Contracts

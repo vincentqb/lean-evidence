@@ -9,8 +9,7 @@ require lean_evidence from git
   "https://github.com/vincentqb/lean-evidence" @ "main"
 ```
 
-Targets **Lean 4.35.0** only. Import `LeanEvidence.Tools` separately for JSON
-reports, API indexes, work inventories, and LaTeX marker checks.
+Targets **Lean 4.35.0** only. Import `LeanEvidence.Report` for optional JSON export.
 
 `Foo/Bar.lean` defines module `Foo.Bar`. Root files assemble the public imports;
 `lakefile.lean` configures Lake.
@@ -18,7 +17,10 @@ reports, API indexes, work inventories, and LaTeX marker checks.
 | Path | Role |
 | --- | --- |
 | `LeanEvidence.lean` | Public library entry point |
-| `LeanEvidence/` | Library implementation and its `Contracts/` proofs |
+| `LeanEvidence/Evidence.lean` | Evidence labels, receipts, and assumption checks |
+| `LeanEvidence/Commands.lean` | Authoring commands, including `WorldClaim` |
+| `LeanEvidence/Report.lean` | JSON export from compiled modules |
+| `LeanEvidence/Contracts/` | Proofs about the library implementation |
 | `Examples/` | Compiled usage template |
 | `Tests/` | Regression suite |
 | `Scripts/` | Runnable tools with `main` |

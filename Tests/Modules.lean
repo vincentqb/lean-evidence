@@ -25,8 +25,9 @@ example (r : TestResults) :
     r.verdict = some .tested ↔ 0 < r.total ∧ r.passed = r.total :=
   Contracts.tested_iff r
 
-example (e : Evidence) : e.needsWork = true → e.isComplete = false :=
-  Contracts.unfinished_incomplete e
+example (e : Evidence) (h : e.isComplete = true) :
+    e.kind = .proven ∨ e.kind = .unitTest ∨ (e.kind = .derived ∧ e.assumptions = #[]) :=
+  (Contracts.complete_iff e).mp h
 
 end
 

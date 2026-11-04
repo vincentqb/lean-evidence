@@ -41,12 +41,6 @@ def Evidence.assumptionNames (e : Evidence) (n : Name) : Array Name :=
 def Evidence.isComplete (e : Evidence) : Bool :=
   e.kind.requiresProof || (e.kind == .derived && e.assumptions.isEmpty)
 
-def Evidence.needsWork (e : Evidence) : Bool :=
-  match e.kind with
-  | .sketch | .unproven | .tested | .failing => true
-  | .derived => !e.assumptions.isEmpty
-  | _ => false
-
 initialize evidenceExt : SimplePersistentEnvExtension (Name × Evidence)
     (Std.HashMap Name Evidence) ←
   registerSimplePersistentEnvExtension {
@@ -60,6 +54,39 @@ initialize evidenceExt : SimplePersistentEnvExtension (Name × Evidence)
 
 def getEvidence? (env : Environment) (n : Name) : Option Evidence :=
   (evidenceExt.getState env)[n]?
+
+structure TestResults where
+  passed : Nat := 0
+  total : Nat := 0
+  deriving Inhabited, Repr
+
+def TestResults.ofResult (passed : Bool) : TestResults :=
+  { passed := if passed then 1 else 0, total := 1 }
+
+def TestResults.merge (a b : TestResults) : TestResults :=
+  { passed := a.passed + b.passed, total := a.total + b.total }
+
+def TestResults.verdict (r : TestResults) : Option EvidenceKind :=
+  if r.total == 0 then none
+  else some (if r.passed == r.total then .tested else .failing)
+
+initialize testResultsExt : SimplePersistentEnvExtension (Name × TestResults)
+    (Std.HashMap Name TestResults) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun m (n, r) =>
+      let p := (m[n]?).getD {}
+      m.insert n (p.merge r)
+    addImportedFn := fun entries => Id.run do
+      let mut m : Std.HashMap Name TestResults := {}
+      for a in entries do
+        for (n, r) in a do
+          let p := (m[n]?).getD {}
+          m := m.insert n (p.merge r)
+      return m
+  }
+
+def getTestResults (env : Environment) (n : Name) : Option TestResults :=
+  (testResultsExt.getState env)[n]?
 
 def standardAxioms : Array Name := #[``propext, ``Classical.choice, ``Quot.sound]
 
@@ -106,73 +133,5 @@ def namedAssumptions (root : Name) : CoreM (Array Name) := do
   if !axioms.isEmpty && frontier.isEmpty then
     throwError "Cannot recover the named assumptions of {root}"
   return frontier.qsort (fun a b => a.toString < b.toString)
-
-syntax (name := theoremsAttr) "theorems" ident+ : attr
-
-initialize theoremsExtension : SimplePersistentEnvExtension (Name × Array Name)
-    (Std.HashMap Name (Array Name)) ←
-  registerSimplePersistentEnvExtension {
-    addEntryFn := fun m (n, claims) => m.insert n claims
-    addImportedFn := fun entries => Id.run do
-      let mut m := {}
-      for a in entries do
-        for (n, claims) in a do
-          let previous := (m[n]?).getD #[]
-          m := m.insert n (claims.foldl
-            (fun acc claim => if acc.contains claim then acc else acc.push claim) previous)
-      return m
-  }
-
-initialize registerBuiltinAttribute {
-    name := `theoremsAttr
-    descr := "author-supplied links from an API declaration to registered claims"
-    add := fun n stx kind => do
-      unless kind == .global do throwError "theorems requires a global attribute"
-      let claims ← match stx with
-        | `(attr| theorems $ns:ident*) => ns.mapM resolveGlobalConstNoOverload
-        | _ => throwError "invalid theorems attribute"
-      for claim in claims do
-        unless (getEvidence? (← getEnv) claim).isSome do
-          throwError "{claim} has no registered evidence"
-      let previous := ((theoremsExtension.getState (← getEnv))[n]?).getD #[]
-      let merged := claims.foldl
-        (fun acc claim => if acc.contains claim then acc else acc.push claim) previous
-      modifyEnv fun env => theoremsExtension.addEntry env (n, merged)
-  }
-
-def getTheorems? (env : Environment) (n : Name) : Option (Array Name) :=
-  (theoremsExtension.getState env)[n]?
-
-syntax (name := dependsOnAttr) "depends_on" ident+ : attr
-initialize dependsOnExtension : ParametricAttribute (Array Name) ←
-  registerParametricAttribute {
-    name := `dependsOnAttr
-    descr := "author-supplied work dependencies; not proof dependencies"
-    getParam := fun _ stx => match stx with
-      | `(attr| depends_on $ns:ident*) => ns.mapM resolveGlobalConstNoOverload
-      | _ => throwError "invalid depends_on attribute"
-  }
-
-def getDependsOn? (env : Environment) (n : Name) : Option (Array Name) :=
-  dependsOnExtension.getParam? env n
-
-syntax (name := estimatedMinutesAttr) "estimated_minutes" num : attr
-initialize estimatedMinutesExtension : ParametricAttribute Nat ←
-  registerParametricAttribute {
-    name := `estimatedMinutesAttr
-    descr := "author-supplied effort estimate in minutes"
-    getParam := fun _ stx => match stx with
-      | `(attr| estimated_minutes $n) => return n.getNat
-      | _ => throwError "invalid estimated_minutes attribute"
-  }
-
-def getEstimatedMinutes? (env : Environment) (n : Name) : Option Nat :=
-  estimatedMinutesExtension.getParam? env n
-
-initialize entryPointAttr : TagAttribute ←
-  registerTagAttribute `entry_point "author-supplied work entry point"
-
-def isEntryPoint (env : Environment) (n : Name) : Bool :=
-  entryPointAttr.hasTag env n
 
 end LeanEvidence

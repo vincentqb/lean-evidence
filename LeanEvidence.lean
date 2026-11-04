@@ -1,5 +1,4 @@
 module
 
-public meta import LeanEvidence.Basic
-public meta import LeanEvidence.WorldClaim
+public meta import LeanEvidence.Commands
 public import LeanEvidence.Contracts
