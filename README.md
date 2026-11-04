@@ -1,69 +1,71 @@
 # LeanEvidence
 
-Compiled claim inventories for Lean libraries. Use this package as a Lake
-dependency and `meta import LeanEvidence` for the commands and evidence tracking.
-Checks run during elaboration; Lean erases proposition proofs from executable code.
+Compiled architecture and evidence for **Lean 4.35.0**. `lake build` checks every
+production module against a Lean `Project`, including private definitions,
+initializers, `extern`, `implemented_by`, and `csimp` replacements.
+
+The `core` is safe, total, and free of IO and initializers. Every public core
+function needs a kernel-checked `Contract` naming its implementation.
+Specifications remain the author's responsibility; the
+[constant-folding example](Examples/ConstantFolding/Contracts.lean) proves behavior
+against independent semantics.
+
+Effects belong in `adapter` modules. A `foreign` binding requires a pure core model,
+a universal `WorldClaim` of agreement, and a native `ConformanceFixture` comparing
+the binding with that model. Elaboration and audit code belongs in `meta` tooling.
+
+Add the dependency and audit target to `lakefile.lean`; use module globs so new
+files are included automatically:
 
 ```lean
 require lean_evidence from git
   "https://github.com/vincentqb/lean-evidence" @ "main"
+
+lean_lib MyLib where
+  globs := #[.one `MyLib, .submodules `MyLib]
+lean_lib Scripts where
+  globs := #[.submodules `Scripts]
+
+@[default_target]
+target audit pkg : Unit := do
+  return (← pkg.toPackage.fetchFacetJob `leanEvidence).map (fun _ => ())
 ```
 
-Targets **Lean 4.35.0** only. Import `LeanEvidence.Report` for optional JSON export.
+Declare every production module in `Scripts/Audit.lean`:
 
-`Foo/Bar.lean` defines module `Foo.Bar`. Root files assemble the public imports;
-`lakefile.lean` configures Lake.
+```lean
+module
+public meta import LeanEvidence
+public section
+meta section
+open Lean LeanEvidence
 
-| Path | Role |
-| --- | --- |
-| `LeanEvidence.lean` | Public library entry point |
-| `LeanEvidence/Evidence.lean` | Evidence labels, receipts, and assumption checks |
-| `LeanEvidence/Commands.lean` | Authoring commands, including `WorldClaim` |
-| `LeanEvidence/Contracts.lean` | Proofs about the core implementation |
-| `LeanEvidence/Report.lean` | JSON export and proofs about its encoder |
-| `Examples/` | Compiled usage template |
-| `Tests/` | Regression suite |
-| `Scripts/` | Runnable tools with `main` |
+def project : Project := {
+  modules := #[⟨`MyLib, .core⟩, ⟨`Scripts.Audit, .tooling⟩]
+  trusted := #[`Init, `Std, `Lean, `LeanEvidence]
+}
 
-The [compiled example](Examples/ConstantFolding/Contracts.lean) is the template:
-[Defs](Examples/ConstantFolding/Defs.lean) defines the API and independent semantics,
-and `Contracts` proves five universal properties and checks two finite cases.
-Lean's `module`, `public`, and `import all` export contract types while keeping
-implementation and proof bodies private.
+def main (args : List String) : IO Unit :=
+  Audit.run project (args.toArray.map String.toName)
+```
 
-`ProvenTheorem name : proposition := proof` checks the proposition and complete
-transitive axiom set, allowing only `propext`, `Classical.choice`, and `Quot.sound`.
-Derived claims retain named assumptions; conjectures retain proof holes.
-Finite tests, native fixtures, environmental propositions, and sketches have
-distinct evidence labels. Lean checks the statement as written.
+Use `module`, `public`, and `import all` for explicit API boundaries, and disable
+`autoImplicit` in the package's `leanOptions`. The shared Lake facet builds the
+catalog and rejects missing or stale classifications.
 
-Keep the computational core pure and effects in adapters. Use a `WorldClaim`
-as an explicit theorem hypothesis for FFI or other external behavior.
-Kernel proofs cover Lean's model; conformance fixtures record runtime evidence.
+`Policy.lean` defines the pure rules; `Contracts.lean` proves the checkers match
+them. `Commands.lean`, `Audit.lean`, and `Report.lean` provide evidence authoring,
+compiled inspection, and JSON. `Examples/` is the template; `Tests/` holds regression
+tests and deliberately invalid fixtures.
 
-The [library contracts](LeanEvidence/Contracts.lean) prove axiom
-policy, assumption identity, receipt counts, verdicts, and completion rules
-over the functions the commands use.
-[Reporting proofs](LeanEvidence/Report.lean) prove that JSON
-readback preserves evidence fields and receipts. Regression tests cover elaboration,
-imports, failed-test rollback, and source metadata.
-
-The library uses its own `ProvenTheorem` command for these contracts.
-`lake test` imports the compiled library and reporting modules and audits their
-evidence, assumptions, axioms, and source locations.
+The repository enforces its own policy and contracts:
 
 ```sh
 lake build
 lake test
 ```
 
-`lake test` builds the libraries and regression suite, then runs the report checks.
-To run that Lean script directly after building:
-
-```sh
-lake env lean --run Scripts/Audit.lean
-```
-
-Lean checks the file and calls its `main` using Lake's toolchain and import paths.
-The script audits the library and example evidence and writes
-`/tmp/lean-evidence-audit.json`. Reports are generated from compiled modules.
+`lake env lean --run path/to/Script.lean ...` checks a script and calls its `main`.
+The audit receives its module arguments from Lake. Tooling is marked `meta`, and
+Lean erases proofs from runtime code. Checker correctness is kernel-proved;
+reflection, compiler correctness, and native execution remain trusted.
