@@ -19,8 +19,8 @@ Targets **Lean 4.35.0** only. Import `LeanEvidence.Report` for optional JSON exp
 | `LeanEvidence.lean` | Public library entry point |
 | `LeanEvidence/Evidence.lean` | Evidence labels, receipts, and assumption checks |
 | `LeanEvidence/Commands.lean` | Authoring commands, including `WorldClaim` |
-| `LeanEvidence/Report.lean` | JSON export from compiled modules |
-| `LeanEvidence/Contracts/` | Proofs about the library implementation |
+| `LeanEvidence/Contracts.lean` | Proofs about the core implementation |
+| `LeanEvidence/Report.lean` | JSON export and proofs about its encoder |
 | `Examples/` | Compiled usage template |
 | `Tests/` | Regression suite |
 | `Scripts/` | Runnable tools with `main` |
@@ -41,12 +41,16 @@ Keep the computational core pure and effects in adapters. Use a `WorldClaim`
 as an explicit theorem hypothesis for FFI or other external behavior.
 Kernel proofs cover Lean's model; conformance fixtures record runtime evidence.
 
-The [library contracts](LeanEvidence/Contracts/Core.lean) prove axiom
+The [library contracts](LeanEvidence/Contracts.lean) prove axiom
 policy, assumption identity, receipt counts, verdicts, and completion rules
 over the functions the commands use.
-[Report contracts](LeanEvidence/Contracts/Report.lean) prove that JSON
+[Reporting proofs](LeanEvidence/Report.lean) prove that JSON
 readback preserves evidence fields and receipts. Regression tests cover elaboration,
 imports, failed-test rollback, and source metadata.
+
+The library uses its own `ProvenTheorem` command for these contracts.
+`lake test` imports the compiled library and reporting modules and audits their
+evidence, assumptions, axioms, and source locations.
 
 ```sh
 lake build
@@ -57,9 +61,9 @@ lake test
 To run that Lean script directly after building:
 
 ```sh
-lake env lean --run Scripts/ReportSmoke.lean
+lake env lean --run Scripts/Audit.lean
 ```
 
 Lean checks the file and calls its `main` using Lake's toolchain and import paths.
-The script checks imported evidence and source metadata and writes
-`/tmp/lean-evidence-example.json`. Reports are generated from compiled modules.
+The script audits the library and example evidence and writes
+`/tmp/lean-evidence-audit.json`. Reports are generated from compiled modules.

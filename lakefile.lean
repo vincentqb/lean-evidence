@@ -21,4 +21,4 @@ lean_lib «Tests» where
 script test do
   let code ← env "lake" #["build", "LeanEvidence", "Examples", "Tests"]
   if code != 0 then return code
-  env "lean" #["--run", "Scripts/ReportSmoke.lean"]
+  env "lean" #["--run", "Scripts/Audit.lean"]

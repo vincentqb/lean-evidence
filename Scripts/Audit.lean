@@ -1,19 +1,18 @@
 module
 
 public meta import LeanEvidence.Report
-import LeanEvidence.Contracts.Report
 
 public section
 meta section
 
 open Lean LeanEvidence
 
-namespace Scripts.ReportSmoke
+namespace Scripts.Audit
 
 def run : IO Unit := do
   let imports : Array Import := #[
     { module := `LeanEvidence },
-    { module := `LeanEvidence.Contracts.Report },
+    { module := `LeanEvidence.Report },
     { module := `Examples }
   ]
   let (contracts, examples) ← Report.withEnvironment imports do
@@ -31,14 +30,14 @@ def run : IO Unit := do
   unless examples.all (fun e =>
       e.axioms.all standardAxioms.contains && e.source.isSome) do
     throw <| IO.userError "Imported example lost its proof audit or source metadata"
-  let report := Json.arr (examples.map Report.entryToJson)
-  let path : System.FilePath := "/tmp/lean-evidence-example.json"
+  let report := Json.arr ((contracts ++ examples).map Report.entryToJson)
+  let path : System.FilePath := "/tmp/lean-evidence-audit.json"
   IO.FS.writeFile path report.pretty
   let reread ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
   unless reread == report do
     throw <| IO.userError "Writing and parsing the JSON report changed its evidence"
   IO.println s!"Checked 12 library contract proofs, 5 example proofs, and 2 finite tests; report: {path}"
 
-end Scripts.ReportSmoke
+end Scripts.Audit
 
-def main : IO Unit := Scripts.ReportSmoke.run
+def main : IO Unit := Scripts.Audit.run
