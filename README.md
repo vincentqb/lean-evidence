@@ -1,128 +1,47 @@
 # lean-manifests
 
-Macros and tooling for **evidence-tagged claims** in Lean 4.
+Compiled claim inventories for Lean libraries. Use this package as a Lake
+dependency and `meta import LeanManifests` for the commands and evidence tracking.
+Checks run during elaboration; Lean erases proposition proofs from executable code.
 
-The thesis: every claim in a Lean module should carry a named
-evidence level, the compiler should track where every `sorry`
-lives, and the trust report should be a build artifact.
+Targets **Lean 4.35.0** only. Import `LeanManifests.Tools` separately for JSON
+reports, API indexes, work inventories, and LaTeX marker checks.
 
-## What's here
+The [compiled example](Examples/ConstantFolding/Manifest.lean) is the template:
+[Defs](Examples/ConstantFolding/Defs.lean) defines the API and independent semantics,
+and `Manifest` proves five universal properties and checks two finite cases.
+Lean's `module`, `public`, and `import all` export contract types while keeping
+implementation and proof bodies private.
 
-The `LeanManifests` namespace ships seven evidence-level macros and
-a small set of build-time tools that walk the manifest environment.
+`ProvenTheorem name : proposition := proof` checks the proposition and complete
+transitive axiom set, allowing only `propext`, `Classical.choice`, and `Quot.sound`.
+Derived claims retain named assumptions; conjectures retain proof holes.
+Finite tests, native fixtures, environmental propositions, and sketches have
+distinct evidence labels. Lean checks the statement as written.
 
-### Macros
+Keep the computational core pure and effects in adapters. Use a `WorldClaim`
+as an explicit theorem hypothesis for FFI or other external behavior.
+Kernel proofs cover Lean's model; conformance fixtures record runtime evidence.
 
-| Macro                  | Glyph | Meaning                                               |
-|------------------------|-------|-------------------------------------------------------|
-| `ProvenTheorem`        | ●     | Kernel-checked proof, sorry-free in transitive closure |
-| `DerivedConjecture`    | ◕     | Proven modulo named manifest entries                  |
-| `DecomposedConjecture` | ◑     | Derivation whose sorry deps are all `TestedConjecture` |
-| `TestedConjecture`     | ◐     | Universal claim with passing test witness             |
-| `UnprovenConjecture`   | ○     | TODO — a hole expected to close                       |
-| `WorldClaim`           | 🌍    | Permanent environmental fact (OS, network, hardware)   |
-| `Sketch`               | ✎     | A name with prose, no `Prop` yet                      |
-| `ConformanceFixture`   | =     | Matches a named external system (R, numpy, ...)       |
+The [self-manifest](LeanManifests/Manifests/MacroContracts.lean) proves axiom
+policy, assumption identity, receipt counts, verdicts, and completion rules
+over the functions the commands use.
+[Report contracts](LeanManifests/Manifests/ReportContracts.lean) prove that JSON
+readback preserves evidence fields and receipts. Regression tests cover elaboration,
+imports, failed-test rollback, and source metadata.
 
-Plus `ManifestAxiom` (deprecated alias for `WorldClaim`) and
-`@[theorems]` for linking functions to their manifest entries.
-
-### Tools
-
-| Tool          | Purpose                                                                                |
-|---------------|----------------------------------------------------------------------------------------|
-| `IndexGen`    | Function ↔ theorem index generator                                                     |
-| `Workplan`    | Surfaces sorry-using `@[manifest_entry]` and `@[sketch]` decls for parallel agents     |
-| `LibraryTame` | Structural audit: walks the reachable surface of a library's API for unwanted features |
-| `LatexExtract`| Dumps the manifest environment to JSON for paper-ready LaTeX appendices                |
-| `LatexRoundtrip`| Verifies that LaTeX `\manifestThm{...}` markers resolve to real Lean entries        |
-| `Conformance` | Reference-system framework (R, numpy, SQL, spec-fixtures)                              |
-
-## How to use
-
-In your `lakefile.lean`:
-
-```lean
-require lean_manifests from git
-  "https://github.com/deanpfoster/lean-manifests" @ "main"
+```sh
+lake build
+lake test
 ```
 
-In your code:
+`lake test` builds the libraries and regression suite, then runs the report checks.
+To run that Lean script directly after building:
 
-```lean
-import LeanManifests.Basic
-
-ProvenTheorem foo : ∀ x, P x := by ...
-WorldClaim os_assumption := ∀ x, Q x
-DerivedConjecture combined : ∀ x, P x ∧ Q x :=
-  fun x => ⟨foo x, os_assumption x⟩
+```sh
+lake env lean --run Scripts/ReportSmoke.lean
 ```
 
-The compiler tracks the evidence chain. Every `Sketch` and
-`WorldClaim` requires a doc-comment (the macro hard-errors on
-missing prose, since the doc-comment is the entire artifact). The
-trust report shows what your top-level claims rest on.
-
-## Design rationale
-
-Lean's kernel is binary: a claim is either proven or it carries
-`sorry`. In real software, claims live at every stage of maturity
-simultaneously — proven on small inputs, tested on fixtures,
-trusted environmentally about the OS, sketched as an aspiration.
-Collapsing all of these into `theorem` versus `theorem ... := by
-sorry` loses information that consumers and future developers
-need.
-
-Each macro introduces a named evidence level that the build system
-enforces. Promotion (e.g., `TestedConjecture` → `ProvenTheorem`)
-is a single keyword change; the build verifies the new level's
-requirements are met.
-
-For the working manual for manifest authors, see
-`templates/MANIFEST_GUIDE.md`. For the disciplined cycle to apply
-when you discover a theorem's body doesn't match its name, see
-§ 5g of the guide ("name-vs-claim mismatch") — this is the
-discipline working as intended: surfacing gaps between intent
-and reality so they can be fixed.
-
-## Starting a new project
-
-We ship templates for AI coding agents at `templates/`. Copy
-`templates/CLAUDE.md` (for Claude / Anthropic conventions) or
-`templates/AGENTS.md` (for the open AGENTS.md convention) to your
-project root and customize.
-
-The templates prescribe a workflow that makes manifests usable as
-design specs, not just build-time tripwires:
-
-1. Before modifying a function, run `bash Scripts/show-theorems.sh
-   PROJECT.functionName` to see what theorems constrain it.
-2. After modifying, run `bash Scripts/verify-all.sh`.
-3. Annotate new theorems with `@[theorems]` on the function they
-   describe.
-
-See `templates/README.md` for details.
-
-## Documentation
-
-| File                                       | What it's about                              |
-|--------------------------------------------|----------------------------------------------|
-| `templates/MANIFEST_GUIDE.md`              | How to write a good manifest                 |
-| `templates/examples-of-good-theorems.lean` | Canonical theorem patterns (lean-zip + RadixExperiment style) |
-| `templates/MANIFEST_AXIOM_AUDIT.md`        | Pinning headline theorems to a trusted-core allowlist |
-| `templates/MANIFEST_LATEX_ROUNDTRIP.md`    | Paper appendices with hover-back-to-Lean    |
-| `CLAUDE.md`                                | Conventions for working ON lean-manifests itself |
-
-## Status
-
-Active development. Used in production by:
-
-- **`l3m`** — a Lean 4 LLM coding agent with kernel-verified safety
-  theorems
-- **`lean-stats`** — a pure statistics library validated against R
-- **`markdown-cm`** — a CommonMark renderer with conformance proofs
-- **`dean_cpp`** — C++ standard library formalization (separate repo)
-
-## License
-
-See LICENSE.
+Lean checks the file and calls its `main` using Lake's toolchain and import paths.
+The script checks imported evidence and source metadata and writes
+`/tmp/lean-manifests-example.json`. Reports are generated from compiled modules.
