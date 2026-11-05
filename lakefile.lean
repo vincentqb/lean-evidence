@@ -16,12 +16,21 @@ lean_lib «LeanEvidence» where
 
 @[default_target]
 lean_lib «Examples» where
-  globs := #[.one `Examples, .submodules `Examples]
+  roots := #[`Examples.ConstantFolding.Claims]
+  globs := #[.submodules `Examples]
+  precompileModules := true
+
+@[default_target]
+lean_lib «LeanEvidenceClaims»
+
+lean_lib «LeanEvidenceManifest» where
+  globs := #[.one `LeanEvidenceManifest, .submodules `LeanEvidenceManifest]
 
 @[test_driver]
 lean_lib «Tests» where
   roots := #[`Tests]
   precompileModules := true
+  leanOptions := #[⟨`linter.extra.unreachableTactic, false⟩]
   needs := #[`@/audit]
 
 @[default_target]
@@ -31,14 +40,13 @@ private def auditPackage (pkg : Package) (entrypoint : System.FilePath) : FetchM
   let mut catalog : Array Name := #[]
   let mut job := Job.nil
   for lib in pkg.leanLibs do
-    if lib.name.toString == pkg.testDriver then continue
-    let modules ← (← lib.modules.fetch).await
-    for mod in modules do
+    unless pkg.defaultTargets.contains lib.name do continue
+    for mod in ← (← lib.modules.fetch).await do
       if catalog.contains mod.name then continue
       catalog := catalog.push mod.name
       job := job.mix (← mod.leanArts.fetch)
   for exe in pkg.leanExes do
-    if exe.name.toString == pkg.testDriver then continue
+    unless pkg.defaultTargets.contains exe.name do continue
     let imports ← (← exe.root.transImports.fetch).await
     for mod in imports.push exe.root do
       if mod.pkg.keyName != pkg.keyName || catalog.contains mod.name then continue

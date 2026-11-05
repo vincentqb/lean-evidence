@@ -1,7 +1,7 @@
 module
 
-public meta import LeanEvidence.Report
-public meta import Lean.Meta.Constructions.CtorIdx
+public meta import LeanEvidence.Policy
+public meta import LeanEvidence.Commands
 import Lean.Elab.PreDefinition.Structural.Eqns
 import Lean.Elab.PreDefinition.WF.Eqns
 
@@ -15,97 +15,15 @@ namespace LeanEvidence.Audit
 private def owner? (env : Environment) (name : Name) : Option Name :=
   env.getModuleIdxFor? name |>.bind fun idx => env.allImportedModuleNames[idx.toNat]?
 
-private def certifiedRecursion (env : Environment) (info : ConstantInfo) : CoreM Bool := do
-  let some parent := Compiler.isUnsafeRecName? info.name | return false
-  let some parentInfo := env.find? parent | return false
-  return !parentInfo.isUnsafe && !parentInfo.isPartial &&
-    owner? env parent == owner? env info.name &&
-    (← findDeclarationRangesCore? info.name).isNone &&
-    ((Elab.Structural.eqnInfoExt.find? env parent).isSome ||
-      (Elab.WF.eqnInfoExt.find? env parent).isSome)
+private def terminates (env : Environment) (name : Name) : Bool :=
+  (Elab.Structural.eqnInfoExt.find? env name).isSome || (Elab.WF.eqnInfoExt.find? env name).isSome
 
-private def inductiveParent? (env : Environment) (name : Name) : Option Name :=
-  match env.find? name with
-  | some (.inductInfo _) => some name
-  | some (.ctorInfo info) => some info.induct
-  | _ => none
-
-private def generatedParent? (env : Environment) (info : ConstantInfo) : CoreM (Option Name) := do
-  if let some projection := env.getProjectionFnInfo? info.name then
-    return inductiveParent? env projection.ctorName
-  unless (← findDeclarationRangesCore? info.name).isNone do return none
-  if Meta.isMatcherCore env info.name || isSparseCasesOn env info.name then
-    return some info.name.getPrefix
-  if let some parent := Compiler.isUnsafeRecName? info.name then return some parent
-  let parent := info.name.getPrefix
-  if let some projection := env.getProjectionFnInfo? parent then
-    if owner? env parent == owner? env info.name &&
-        (info.name == mkDefaultFnOfProjFn parent ||
-          info.name == mkInheritedDefaultFnOfProjFn parent) then
-      return inductiveParent? env projection.ctorName
-  if isAuxRecursor env info.name || isNoConfusion env info.name then
-    return inductiveParent? env parent
-  if info.name == parent.str "go" && isAuxRecursor env parent &&
-      (env.find? parent).any (fun parentInfo =>
-        (parentInfo.value?).any (·.getUsedConstants.contains info.name)) then
-    return inductiveParent? env parent.getPrefix
-  if let some ind := isCtorIdxCore? env info.name then return some ind.name
-  if info.name == mkFlatCtorOfStructCtorName parent then
-    return inductiveParent? env parent |>.filter (isStructure env)
-  if owner? env parent == owner? env info.name then
-    if (Elab.Structural.eqnInfoExt.find? env parent).isSome then
-      if info.name == Meta.mkSmartUnfoldingNameFor parent then return some parent
-      if info.name == parent ++ `_f &&
-          (env.find? parent).any (fun parentInfo =>
-            (parentInfo.value?).any (·.getUsedConstants.contains info.name)) then
-        return some parent
-    if let some recursion := Elab.WF.eqnInfoExt.find? env parent then
-      if info.name == recursion.declNameNonRec then return some parent
-  if let some ind := inductiveParent? env parent then
-    if info.name == ind.str "ofNat" && (← isEnumType ind) &&
-        (env.find? (ind.str "ofNat_ctorIdx")).any (fun proof =>
-          proof.isTheorem && proof.type.getUsedConstants.contains info.name) then
-      return some ind
-    let instanceName := ind ++ `_sizeOf_inst
-    if Meta.isInstanceCore env instanceName then
-      if let some instanceInfo := env.find? instanceName then
-        if instanceInfo.type.getForallBody.getAppFn.constName? == some ``SizeOf &&
-            (instanceInfo.value?).any (·.getUsedConstants.contains info.name) then
-          return some ind
-    if info.name == instanceName && Meta.isInstanceCore env info.name &&
-        info.type.getForallBody.getAppFn.constName? == some ``SizeOf then
-      return some ind
-  return none
-
-private def isSplitter (env : Environment) (info : ConstantInfo) : CoreM Bool := do
-  let hasName := match info.name with
-    | .str _ "splitter" => true
-    | _ => false
-  unless isPrivateName info.name && hasName &&
-      !info.isUnsafe && !info.isPartial &&
-      (← findDeclarationRangesCore? info.name).isNone do return false
-  return Meta.isMatcherCore env info.name.getPrefix ||
-    Meta.isMatcherCore env (privateToUserName info.name.getPrefix)
-
-private partial def comptime (env : Environment) (name : Name) : CoreM Bool := do
-  if isMarkedMeta env name then return true
-  let some info := env.find? name | return false
-  if info.isTheorem || (← isSplitter env info) then return true
-  let some parent ← generatedParent? env info | return false
-  return (← comptime env parent) || (← comptime env (privateToUserName parent))
-
-private def generatedInstanceHelper (env : Environment) (info : ConstantInfo) : CoreM Bool := do
-  let parent := info.name.getPrefix
-  unless Meta.isInstanceCore env parent && owner? env parent == owner? env info.name do
-    return false
-  let some parentInfo := env.find? parent | return false
-  let some body := parentInfo.value? | return false
-  unless body.getUsedConstants.contains info.name do return false
-  let some ranges ← findDeclarationRangesCore? info.name | return false
-  let some parentRanges ← findDeclarationRangesCore? parent | return false
-  return decide (ranges.range = ranges.selectionRange) &&
-    decide (ranges.range = parentRanges.range) &&
-    decide (ranges.selectionRange = parentRanges.selectionRange)
+private def recursionParent? (env : Environment) (info : ConstantInfo) : CoreM (Option Name) := do
+  let some parent := Compiler.isUnsafeRecName? info.name | return none
+  let some parentInfo := env.find? parent | return none
+  unless !parentInfo.isUnsafe && owner? env parent == owner? env info.name &&
+      (← findDeclarationRangesCore? info.name).isNone do return none
+  return some parent
 
 private def computational (info : ConstantInfo) : MetaM Bool := do
   unless info matches .defnInfo _ | .opaqueInfo _ | .axiomInfo _ do return false
@@ -122,104 +40,39 @@ private def effects (env : Environment) (type : Expr) : Bool := Id.run do
     seen := seen.insert name
     if name == ``IO.RealWorld then return true
     if let some info := env.find? name then
-      match info with
-      | .inductInfo inductiveInfo => pending := pending ++ inductiveInfo.ctors.toArray
-      | .ctorInfo constructor => pending := pending ++ constructor.type.getUsedConstants
-      | _ => pure ()
-      if let some body := info.value? (allowOpaque := true) then
-        pending := pending ++ body.getUsedConstants
+      if let .inductInfo ind := info then pending := pending ++ ind.ctors.toArray
+      if let .ctorInfo constructor := info then pending := pending ++ constructor.type.getUsedConstants
+      if let some body := info.value? (allowOpaque := true) then pending := pending ++ body.getUsedConstants
   return false
 
-private def foreign? (env : Environment) (name : Name) : Option ForeignEvidence :=
-  getForeignEvidence? env name <|>
-    (foreignExt.getState env).toArray.findSome? fun (_, entry) =>
-      if Compiler.getImplementedBy? env entry.binding == some name then some entry else none
-
-private def validForeign (project : Project) (entry : ForeignEvidence) : MetaM Bool := do
-  let env ← getEnv
-  let some model := env.find? entry.model | return false
-  let some moduleName := owner? env entry.model | return false
-  return project.role? moduleName == some .core &&
-    !model.isUnsafe && !model.isPartial && !effects env model.type &&
-    !isExtern env entry.model && (Compiler.getImplementedBy? env entry.model).isNone &&
-    (getEvidence? env entry.assumption).map (·.kind) == some .world &&
-    (getEvidence? env entry.fixture).map (·.kind) == some .fixture
-
-private def runtimeAxioms (env : Environment) : CoreM (Array Name) := do
-  let mut result := #[]
-  for (axiomName, fixture) in (runtimeAxiomExt.getState env).toArray do
-    unless (getEvidence? env fixture).map (·.kind) == some .fixture do continue
-    unless (env.find? axiomName).any (·.isAxiom) do continue
-    if (← collectAxioms fixture).contains axiomName then result := result.push axiomName
-  return result
-
-private def dependencies (env : Environment) (info : ConstantInfo) : CoreM (Array Name) := do
-  let mut pending := info.getUsedConstantsAsSet.toArray.push info.name
-  let mut seen : NameSet := {}
-  let mut modules : NameSet := {}
-  while !pending.isEmpty do
-    let name := pending.back!
-    pending := pending.pop
-    if seen.contains name then continue
-    seen := seen.insert name
-    let some dependency := env.find? name
-      | throwError "Cannot inspect the compiled dependency {name} of {info.name}"
-    if !dependency.isTheorem then
-      let some moduleName := owner? env name
-        | throwError "Cannot locate the compiled dependency {name} of {info.name}"
-      modules := modules.insert moduleName
-    if let some replacement := Compiler.getImplementedBy? env name then
-      pending := pending.push replacement
-    if let some replacement := (Compiler.CSimp.ext.getState env).map.find? name then
-      requireProof replacement.thmName
-      pending := pending.push replacement.toDeclName
-    for initializer in #[getInitFnNameFor? env name, getBuiltinInitFnNameFor? env name] do
-      if let some initializer := initializer then pending := pending.push initializer
-  return modules.toArray
-
-private def declaration (project : Project) (nativeAxioms : Array Name)
-    (info : ConstantInfo) (moduleName : Name) : CoreM DeclarationFact := do
+private def declaration (project : Project) (info : ConstantInfo) (moduleName : Name) :
+    CoreM DeclarationFact := do
   let env ← getEnv
   let isComputational ← Meta.MetaM.run' <| computational info
-  let isRecursion ← certifiedRecursion env info
-  let foreign := foreign? env info.name
-  let foreignEvidence ← Meta.MetaM.run' <| match foreign with
-    | some entry => validForeign project entry
-    | none => pure false
-  let needsContract := project.role? moduleName == some .core && isComputational &&
-    info.type.isForall && !isPrivateName info.name &&
-    !Meta.isInstanceCore env info.name && (← generatedParent? env info).isNone &&
-    !(← isSplitter env info) &&
-    !(← generatedInstanceHelper env info)
-  let proofs := getContracts env info.name
-  for proof in proofs do requireProof proof
+  let parent ← recursionParent? env info
+  let ownRecursion := (Compiler.getImplementedBy? env info.name).any fun impl =>
+    Compiler.isUnsafeRecName? impl == some info.name
+  let replacement := (Compiler.getImplementedBy? env info.name).filter fun _ => !ownRecursion
   return {
     name := info.name
     moduleName
     computational := isComputational
-    comptime := ← comptime env info.name
-    isUnsafe := info.isUnsafe && !isRecursion
-    isPartial := info.isPartial && !isRecursion
-    effects := isComputational && effects env info.type
+    isUnsafe := parent.isNone && info.isUnsafe
+    isPartial := match parent with
+      | some name => !terminates env name
+      | none => info.isPartial || (ownRecursion && !terminates env info.name)
+    external := isExtern env info.name
+    replaced := replacement.isSome
     initializes := (getInitFnNameFor? env info.name).isSome ||
       (getBuiltinInitFnNameFor? env info.name).isSome
-    external := isExtern env info.name ||
-      (Compiler.getImplementedBy? env info.name).isSome || foreign.isSome
-    foreignEvidence
-    missingBody := (info.value? (allowOpaque := true)).isNone
+    effects := isComputational && effects env info.type
+    forbidden := info.getUsedConstantsAsSet.toArray.filter project.forbidden.contains
     axioms := ← collectAxioms info.name
-    conformance := (getEvidence? env info.name).map (·.kind) == some .fixture ||
-      (getRuntimeAxiomOrigin? env info.name).isSome
-    runtimeAxioms := nativeAxioms
-    needsContract
-    hasContract := !proofs.isEmpty
-    dependencies := ← if isComputational then dependencies env info else pure #[]
   }
 
 def collect (project : Project) (catalog : Array Name) : CoreM Inventory := do
   modifyEnv (·.setExporting false)
   let env ← getEnv
-  let nativeAxioms ← runtimeAxioms env
   let modules ← catalog.mapM fun name => do
     let some idx := env.getModuleIdx? name | throwError "Compiled module {name} is unavailable"
     let data := env.header.moduleData[idx.toNat]!
@@ -234,150 +87,207 @@ def collect (project : Project) (catalog : Array Name) : CoreM Inventory := do
     if let some moduleName := owner? env name then
       if catalog.contains moduleName then
         declarations := declarations.push
-          (← withCurrHeartbeats <| declaration project nativeAxioms info moduleName)
-  let mut claims := #[]
-  for name in project.requirements do
-    if !(env.contains name) then continue
-    let some moduleName := owner? env name
-      | throwError "{name}: cannot locate required inventory"
-    unless catalog.contains moduleName do
-      throwError "{name}: requirements must belong to a classified project module"
-    let checked ← withCurrHeartbeats <| Meta.MetaM.run' <| validateRequirements name
-    for claim in checked do
-      for declarationName in #[claim.name] ++ claim.evidence.toArray do
-        unless (owner? env declarationName).any catalog.contains do
-          throwError "{declarationName}: required evidence must belong to a classified project module"
-    claims := claims ++ checked
-  return {
-    modules
-    declarations := declarations.qsort (fun a b => a.name.toString < b.name.toString)
-    claims
-  }
+          (← withCurrHeartbeats <| declaration project info moduleName)
+  return { modules, declarations }
 
-def violations (project : Project) (catalog : Array Name) (inventory : Inventory) : Array String :=
-  Id.run do
-    let mut errors := #[]
-    if project.requirements.isEmpty then
-      errors := errors.push "Select at least one compiled Requirements inventory"
-    unless decide project.requirements.toList.Nodup do
-      errors := errors.push "Duplicate required inventories"
-    unless decide (inventory.claims.toList.map (·.name)).Nodup do
-      errors := errors.push "Duplicate required claims"
-    for name in project.requirements do
-      unless inventory.claims.any (·.inventory == name) do
-        errors := errors.push s!"Missing required inventory: {name}"
-    for claim in inventory.claims do
-      unless project.requirements.contains claim.inventory do
-        errors := errors.push s!"Unexpected required inventory: {claim.inventory}"
-      unless claim.isComplete do
-        errors := errors.push s!"Outstanding {repr claim.kind} requirement: {claim.name}"
-    unless decide (project.modules.toList.map (·.name)).Nodup do
-      errors := errors.push "Duplicate module classifications"
-    for name in catalog do
-      if (project.role? name).isNone then errors := errors.push s!"Unclassified module: {name}"
-      unless inventory.modules.any (·.name == name) do
-        errors := errors.push s!"Missing compiled module: {name}"
-    for rule in project.modules do
-      unless catalog.contains rule.name do errors := errors.push s!"Stale module classification: {rule.name}"
-    for fact in inventory.modules do
-      unless fact.check project do
-        errors := errors.push s!"{fact.name}: use module and import only permitted module roles"
-    for fact in inventory.declarations do
-      if let some role := project.role? fact.moduleName then
-        unless fact.check project role do
-          let mut reasons := #[]
-          if fact.needsContract && !fact.hasContract then reasons := reasons.push "missing Contract"
-          if fact.axioms.any (fun ax => !standardAxioms.contains ax &&
-              !(fact.conformance && fact.runtimeAxioms.contains ax)) then
-            reasons := reasons.push s!"nonstandard axioms {nonstandardAxioms fact.axioms}"
-          if fact.external && !(role == .foreign && fact.foreignEvidence) &&
-              !(role == .tooling && fact.comptime) then
-            reasons := reasons.push "unregistered foreign implementation"
-          if fact.computational then
-            if fact.missingBody && !fact.external then reasons := reasons.push "unavailable body"
-            if role != .tooling && (fact.isUnsafe || fact.isPartial) &&
-                !(fact.external && fact.foreignEvidence) then reasons := reasons.push "unsafe or partial"
-            if role == .core && (fact.effects || fact.initializes || fact.external) then
-              reasons := reasons.push "effects in core"
-            if role == .tooling && !fact.comptime then reasons := reasons.push "runtime code in tooling"
-            let forbidden := fact.dependencies.filter (fun target => !project.permits role target false)
-            if !forbidden.isEmpty then reasons := reasons.push s!"forbidden dependencies {forbidden}"
-          if fact.conformance && role == .core then reasons := reasons.push "runtime evidence in core"
-          let reason := String.intercalate "; " reasons.toList
-          errors := errors.push s!"{fact.name}: {reason}"
-      else errors := errors.push s!"{fact.name}: unclassified owner {fact.moduleName}"
-    return errors
-
-def check (project : Project) (catalog : Array Name) : CoreM Inventory := do
-  let inventory ← collect project catalog
-  unless project.isComplete catalog inventory do
-    let errors := String.intercalate "\n" (violations project catalog inventory).toList
-    throwError "Project audit failed:\n{errors}"
-  return inventory
-
-private def union (left right : Array Name) : Array Name :=
-  right.foldl (fun names name => if names.contains name then names else names.push name) left
+def withEnvironment {α : Type} (imports : Array Import) (action : CoreM α) : IO α := do
+  initSearchPath (← findSysroot)
+  unsafe enableInitializersExecution
+  let imports := imports.map ({ · with importAll := true })
+  let env ← withImporting do
+    let (_, state) ← (importModulesCore imports).run
+    finalizeImport state imports {} (leakEnv := false) (loadExts := true) (isModule := true)
+  let (result, _) ← action.toIO { fileName := "<lean-evidence>", fileMap := default } { env }
+  return result
 
 private def merge (left right : DeclarationFact) : DeclarationFact := {
   left with
   computational := left.computational || right.computational
-  comptime := left.comptime && right.comptime
   isUnsafe := left.isUnsafe || right.isUnsafe
   isPartial := left.isPartial || right.isPartial
-  effects := left.effects || right.effects
-  initializes := left.initializes || right.initializes
   external := left.external || right.external
-  foreignEvidence := left.foreignEvidence || right.foreignEvidence
-  missingBody := left.missingBody && right.missingBody
-  axioms := union left.axioms right.axioms
-  conformance := left.conformance || right.conformance
-  runtimeAxioms := union left.runtimeAxioms right.runtimeAxioms
-  needsContract := left.needsContract || right.needsContract
-  hasContract := left.hasContract || right.hasContract
-  dependencies := union left.dependencies right.dependencies
+  replaced := left.replaced || right.replaced
+  initializes := left.initializes || right.initializes
+  effects := left.effects || right.effects
+  forbidden := right.forbidden.foldl (fun names n => if names.contains n then names else names.push n)
+    left.forbidden
+  axioms := right.axioms.foldl (fun names n => if names.contains n then names else names.push n)
+    left.axioms
 }
 
 def inspect (project : Project) (catalog : Array Name) : IO Inventory := do
   let mut imported : NameSet := {}
   for root in catalog do
-    let dependencies ← Report.withEnvironment #[{ module := root }] do
+    let reached ← withEnvironment #[{ module := root }] do
       let env ← getEnv
       return catalog.filter fun name => name != root && (env.getModuleIdx? name).isSome
-    for dependency in dependencies do imported := imported.insert dependency
+    for name in reached do imported := imported.insert name
   let mut modules : Std.HashMap Name ModuleFact := {}
   let mut declarations : Std.HashMap (Name × Name) DeclarationFact := {}
-  let mut claims : Std.HashMap Name ClaimFact := {}
-  for root in catalog.filter (fun name => !imported.contains name) do
-    let inventory ← Report.withEnvironment #[{ module := root }] do
+  for root in catalog.filter (!imported.contains ·) do
+    let inventory ← withEnvironment #[{ module := root }] do
       let env ← getEnv
       collect project (catalog.filter fun name => (env.getModuleIdx? name).isSome)
     for fact in inventory.modules do modules := modules.insert fact.name fact
     for fact in inventory.declarations do
       let key := (fact.moduleName, fact.name)
-      let fact := (declarations[key]?).map (merge · fact) |>.getD fact
-      declarations := declarations.insert key fact
-    for claim in inventory.claims do
-      if let some previous := claims[claim.name]? then
-        unless previous.inventory == claim.inventory && previous.kind == claim.kind &&
-            previous.evidence == claim.evidence && previous.verified == claim.verified do
-          throw <| IO.userError s!"Conflicting compiled requirement: {claim.name}"
-      claims := claims.insert claim.name claim
-  let inventory := {
-    modules := modules.toArray.map Prod.snd |>.qsort (fun a b => a.name.toString < b.name.toString)
-    declarations := declarations.toArray.map Prod.snd |>.qsort (fun a b =>
-      if a.moduleName == b.moduleName then a.name.toString < b.name.toString
-      else a.moduleName.toString < b.moduleName.toString)
-    claims := claims.toArray.map Prod.snd |>.qsort (fun a b => a.name.toString < b.name.toString)
-    : Inventory
+      declarations := declarations.insert key ((declarations[key]?).map (merge · fact) |>.getD fact)
+  return {
+    modules := modules.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
+    declarations := declarations.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
   }
-  unless project.isComplete catalog inventory do
-    throw <| IO.userError <|
-      "Project audit failed:\n" ++ String.intercalate "\n" (violations project catalog inventory).toList
-  return inventory
 
-def run (project : Project) (catalog : Array Name) : IO Unit := do
+def violations (project : Project) (catalog : Array Name) (inventory : Inventory) :
+    Array String := Id.run do
+  let mut errors := #[]
+  let layers := project.layers.map (·.1)
+  for layer in layers do
+    if (layers.filter (· == layer)).size > 1 then errors := errors.push s!"Duplicate layer {layer}"
+  for name in catalog do
+    if (project.role? name).isNone then errors := errors.push s!"Unclassified module {name}"
+    unless inventory.modules.any (·.name == name) do errors := errors.push s!"Missing module {name}"
+  for fact in inventory.modules do
+    let some role := project.role? fact.name | continue
+    unless fact.usesModuleSystem do errors := errors.push s!"{fact.name}: start the file with `module`"
+    for dependency in fact.imports do
+      unless project.admits role dependency do
+        errors := errors.push s!"{fact.name} ({repr role}) may not import {dependency.name}"
+  for fact in inventory.declarations do
+    let some role := project.role? fact.moduleName
+      | errors := errors.push s!"{fact.name}: unclassified module {fact.moduleName}"
+    if fact.admitted role then continue
+    let mut reasons := #[]
+    unless fact.standard do
+      reasons := reasons.push s!"axioms {fact.axioms.filter (!standardAxioms.contains ·)}"
+    if fact.computational then
+      if fact.isUnsafe then reasons := reasons.push "unsafe"
+      if fact.isPartial then reasons := reasons.push "partial"
+      if fact.external then reasons := reasons.push "@[extern]"
+      if fact.replaced then reasons := reasons.push "@[implemented_by]"
+      if fact.initializes then reasons := reasons.push "initializer"
+      if fact.effects then reasons := reasons.push "IO"
+      unless fact.forbidden.isEmpty do reasons := reasons.push s!"uses {fact.forbidden}"
+      if role == .boundary && !fact.external then reasons := reasons.push "not an @[extern] binding"
+    errors := errors.push s!"{fact.name} ({repr role}): {String.intercalate ", " reasons.toList}"
+  return errors
+
+structure Config where
+  challenge : Name
+  solution : Name
+  theorems : Array Name
+  holes : Array Name
+  deriving Inhabited, Repr
+
+def readConfig (path : System.FilePath) : IO Config := do
+  let json ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
+  let names (field : String) : IO (Array Name) := do
+    let values ← IO.ofExcept <| json.getObjValAs? (Array String) field
+    return values.map String.toName
+  return {
+    challenge := (← IO.ofExcept <| json.getObjValAs? String "challenge_module").toName
+    solution := (← IO.ofExcept <| json.getObjValAs? String "solution_module").toName
+    theorems := ← names "theorem_names"
+    holes := ((json.getObjValAs? (Array String) "definition_names").toOption.getD #[]).map
+      String.toName
+  }
+
+structure Headline where
+  name : Name
+  premises : Array Premise
+  deriving Inhabited, Repr
+
+private def discharged (statement : Expr) : CoreM Bool := do
+  if statement.hasFVar || statement.hasMVar then return false
+  for (_, info) in (← getEnv).constants.toList do
+    if info.isTheorem && info.type == statement then
+      if (← nonstandardAxioms info.name).isEmpty then return true
+  return false
+
+def headline (name : Name) : MetaM Headline := do
+  let some info := (← getEnv).find? name | throwError "Headline {name} is not compiled"
+  Meta.forallTelescope info.type fun binders _ => do
+    let mut premises := #[]
+    for binder in binders do
+      let statement ← instantiateMVars (← Meta.inferType binder)
+      let some claim := statement.getAppFn.constName? | continue
+      let some kind := claimKind? (← getEnv) claim | continue
+      premises := premises.push { claim, kind, discharged := ← discharged statement }
+    return { name, premises }
+
+private partial def challengeImports (project : Project) (root : Name) (pending : List Name)
+    (seen : NameSet) (errors : Array String) : IO (Array String) := do
+  match pending with
+  | [] => return errors
+  | name :: rest =>
+    if seen.contains name then return ← challengeImports project root rest seen errors
+    let path : System.FilePath := (name.toString.replace "." "/") ++ ".lean"
+    let header ← parseImports' (← IO.FS.readFile path) path.toString
+    let mut errors := errors
+    let mut next := rest
+    for dependency in header.imports do
+      let target := dependency.module
+      if root.isPrefixOf target then
+        next := target :: next
+      else
+        match project.role? target with
+        | some .spec | some .boundary => pure ()
+        | some role =>
+          errors := errors.push s!"{name} imports {target} ({repr role}); \
+            a challenge may import only spec and boundary modules"
+        | none =>
+          unless project.trusts target do
+            errors := errors.push s!"{name} imports untrusted {target}"
+    challengeImports project root next (seen.insert name) errors
+
+def headlineViolations (project : Project) (config : Config) (headlines : Array Headline) :
+    MetaM (Array String) := do
+  let env ← getEnv
+  let mut errors := #[]
+  for (claim, _) in registeredClaims env do
+    if let some moduleName := owner? env claim then
+      if let some role := project.role? moduleName then
+        unless role == .spec do
+          errors := errors.push s!"{claim}: declare claims in a spec module, not {moduleName}"
+  for hole in config.holes do
+    match (owner? env hole).bind project.role? with
+    | some .core | some .shell => pure ()
+    | _ => errors := errors.push s!"{hole}: a definition hole must be a core or shell definition"
+  for line in headlines do
+    for premise in line.premises do
+      if premise.kind == .world && (evidenceFor env premise.claim).isEmpty then
+        errors := errors.push s!"{line.name}: world assumption {premise.claim} has no Test or Check"
+  return errors
+
+private def describe (env : Environment) (premise : Premise) : String :=
+  let found := evidenceFor env premise.claim
+  let tests := (found.filter (!·.native)).size
+  let checks := (found.filter (·.native)).size
+  let kind := if premise.kind == .world then "world" else if premise.discharged then "proved" else "open"
+  s!"{kind} {premise.claim} [{tests} tests, {checks} checks]"
+
+def run (project : Project) (catalog : Array Name) (configPath : System.FilePath := "comparator.json") :
+    IO Unit := do
+  let config ← readConfig configPath
   let inventory ← inspect project catalog
-  IO.println s!"Checked {inventory.modules.size} modules, {inventory.declarations.size} declarations, \
-    and {inventory.claims.size} required claims"
+  let (lines, headlineErrors, report) ← withEnvironment #[{ module := config.solution }] do
+    let lines ← Meta.MetaM.run' <| config.theorems.mapM headline
+    let errors ← Meta.MetaM.run' <| headlineViolations project config lines
+    let env ← getEnv
+    let report := lines.map fun line =>
+      let mark := if level line.premises == .proved then "●" else "◕"
+      let premises := line.premises.map (describe env)
+      s!"{mark} {line.name}" ++
+        (if premises.isEmpty then "" else s!"  ({String.intercalate "; " premises.toList})")
+    return (lines, errors, report)
+  let challengeErrors ← challengeImports project config.challenge [config.challenge] {} #[]
+  let errors := (if project.check catalog inventory then #[] else
+    let found := violations project catalog inventory
+    if found.isEmpty then #["Project check failed"] else found) ++ headlineErrors ++ challengeErrors
+  unless errors.isEmpty do
+    throw <| IO.userError ("LeanEvidence audit failed:\n" ++ String.intercalate "\n" errors.toList)
+  IO.println s!"Checked {inventory.modules.size} modules and {inventory.declarations.size} declarations"
+  for line in report do IO.println line
+  let proved := (lines.filter (level ·.premises == .proved)).size
+  IO.println s!"{proved}/{lines.size} headline claims proved; the others depend on open conjectures"
 
 end LeanEvidence.Audit

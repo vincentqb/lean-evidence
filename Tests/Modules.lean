@@ -1,34 +1,23 @@
 module
 
 meta import Tests.Support
-public import Examples.ConstantFolding.Contracts
+public import Examples.ConstantFolding.Claims
 
 public section
+
 namespace Tests.Modules
+
 open Examples.ConstantFolding
 
-example (env : Nat → Nat) (e : Expr) (v : Nat) :
-    Evaluates env (fold e) v ↔ Evaluates env e v :=
-  fold_preserves_meaning env e v
+example (env : Nat → Nat) (e : Expr) : eval env (fold e) = eval env e :=
+  fold_preserves_meaning env e
 
-example (e : Expr) : fold (fold e) = fold e := fold_idempotent e
+example (agrees : NativeAddAgrees) (e : Expr) :
+    Shell.output e = toString (eval (fun _ => 0) e) :=
+  output_correct agrees e
 
-example : Expr → Expr := fold
 rejects "Unknown identifier" in #check Examples.ConstantFolding.combine
-rejects "Unknown identifier" in #check Examples.ConstantFolding.eval_fold
-rejects "rfl" in theorem cannot_unfold : eval (fun _ => 0) (.lit 4) = 4 := by rfl
-
-meta section
-open LeanEvidence
-
-example (r : TestResults) :
-    r.verdict = some .tested ↔ 0 < r.total ∧ r.passed = r.total :=
-  Contracts.tested_iff r
-
-example (e : Evidence) (h : e.isComplete = true) :
-    e.kind = .proven ∨ e.kind = .unitTest ∨ (e.kind = .derived ∧ e.assumptions = #[]) :=
-  (Contracts.complete_iff e).mp h
-
-end
+rejects "rfl" in theorem cannot_unfold : fold (.lit 4) = .lit 4 := by rfl
+rejects "Type mismatch" in theorem world_is_not_a_fact : NativeAddAgrees := fun _ _ => rfl
 
 end Tests.Modules
