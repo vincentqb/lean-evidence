@@ -39,15 +39,17 @@ theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
 ```
 
 `Test` proves an instance in the kernel; `Check` compiles and runs it during the build,
-including foreign code. The audit reports each headline:
+including foreign code. Assumptions only a running system can exercise, such as system
+calls, rest on live suites marked `@[exercises Claim]`; keep those suites in a default target
+so the audit sees them. The audit reports each headline:
 
 ```text
-◕ Examples.ConstantFolding.fold_idempotent  (open Examples.ConstantFolding.Normalizes [2 tests, 0 checks])
-● Examples.ConstantFolding.output_correct  (world Examples.ConstantFolding.NativeAddAgrees [0 tests, 2 checks])
+◕ Examples.ConstantFolding.fold_idempotent  (open Examples.ConstantFolding.Normalizes [2 tests, 0 checks, 0 suites])
+● Examples.ConstantFolding.output_correct  (world Examples.ConstantFolding.NativeAddAgrees [0 tests, 2 checks, 0 suites])
 ```
 
 A headline is proved (●) when every premise is a world assumption or a proved conjecture.
-Every world assumption needs a `Test` or `Check`.
+Every world assumption needs a `Test`, `Check`, or live suite.
 
 ## Use it
 
