@@ -25,20 +25,10 @@ elab "rejects " reason:str " in " cmd:command : command => do
   unless diagnostics.any (fun text => (text.splitOn reason.getString).length > 1) do
     throwError "Expected rejection containing {reason.getString}, got {diagnostics}"
 
-elab "assert_absent " n:ident : command => do
-  unless (← resolveGlobalName n.getId).isEmpty do
-    throwError "{n} survived a rejected command"
-
-elab "assert_claim " n:ident " is " kind:ident : command => do
-  let name ← resolveGlobalConstNoOverload n
-  let expected := if kind.getId == `world then ClaimKind.world else .conjecture
-  unless claimKind? (← getEnv) name == some expected do
-    throwError "{name}: expected a {kind.getId} claim"
-
 elab "assert_evidence " n:ident " = " tests:num " tests " checks:num " checks " suites:num
     " suites" : command => do
   let name ← resolveGlobalConstNoOverload n
-  let found := evidenceFor (← getEnv) name
+  let found := (allEvidence (← getEnv)).filter (·.claim == name)
   let count := fun kind => (found.filter (·.kind == kind)).size
   unless count .test == tests.getNat && count .check == checks.getNat &&
       count .suite == suites.getNat do

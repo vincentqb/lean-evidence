@@ -10,16 +10,14 @@ namespace LeanEvidence
 
 inductive Role where
   | spec | boundary | core | shell | tooling
-  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Inhabited, Repr
+  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Repr
 
 @[expose] def Role.Inner (role : Role) : Prop :=
   role = .spec ∨ role = .boundary ∨ role = .core
 
 structure Project where
   layers : Array (Name × Role)
-  trusted : Array Name := #[`Init, `Std, `Lean, `Lake]
-  forbidden : Array Name := #[``dbgTrace, ``dbgTraceIfShared, ``dbgSleep]
-  deriving Inhabited, Repr
+  trusted : Array Name := #[`Init, `Std, `Lean]
 
 @[expose] def Project.role? (project : Project) (name : Name) : Option Role :=
   (project.layers.foldl (init := none) fun best (layer, role) =>
@@ -33,32 +31,28 @@ structure Project where
 structure ImportFact where
   name : Name
   comptime : Bool
-  deriving Inhabited, Repr
 
 structure ModuleFact where
   name : Name
   usesModuleSystem : Bool
-  imports : Array ImportFact := #[]
-  deriving Inhabited, Repr
+  imports : Array ImportFact
 
 structure DeclarationFact where
   name : Name
   moduleName : Name
-  computational : Bool := true
-  isUnsafe : Bool := false
-  isPartial : Bool := false
-  external : Bool := false
-  replaced : Bool := false
-  initializes : Bool := false
-  effects : Bool := false
-  forbidden : Array Name := #[]
-  axioms : Array Name := #[]
-  deriving Inhabited, Repr
+  computational : Bool
+  isUnsafe : Bool
+  isPartial : Bool
+  external : Bool
+  replaced : Bool
+  initializes : Bool
+  effects : Bool
+  debug : Bool
+  axioms : Array Name
 
 structure Inventory where
   modules : Array ModuleFact
   declarations : Array DeclarationFact
-  deriving Inhabited, Repr
 
 @[expose] def Inventory.RuntimeImport (inventory : Inventory) (source target : Name) : Prop :=
   ∃ fact ∈ inventory.modules, fact.name = source ∧
@@ -68,17 +62,15 @@ structure Inventory where
 
 inductive ClaimKind where
   | world | conjecture
-  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Inhabited, Repr
+  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Repr
 
 structure Premise where
   claim : Name
   kind : ClaimKind
-  discharged : Bool := false
-  deriving Inhabited, Repr
+  discharged : Bool
 
-inductive Level where
-  | proved | derived
-  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Inhabited, Repr
+@[expose] def proved (premises : Array Premise) : Bool :=
+  premises.all fun premise => premise.kind == .world || premise.discharged
 
 @[expose] def Role.permits : Role → Role → Bool
   | .tooling, _ => true
@@ -98,89 +90,69 @@ inductive Level where
   | some role => fact.usesModuleSystem && fact.imports.all (project.admits role)
   | none => false
 
-@[expose] def DeclarationFact.pure (fact : DeclarationFact) : Bool :=
-  !fact.isUnsafe && !fact.isPartial && !fact.external && !fact.replaced &&
-    !fact.initializes && !fact.effects && fact.forbidden.isEmpty
+@[expose] def DeclarationFact.reasons (role : Role) (fact : DeclarationFact) : List String :=
+  let flags := [(fact.isUnsafe, "unsafe"), (fact.isPartial, "partial"),
+    (fact.external, "@[extern]"), (fact.replaced, "@[implemented_by]"),
+    (fact.initializes, "initializer"), (fact.effects, "IO"), (fact.debug, "dbg builtin")]
+  let raised := fun (allowed : List String) =>
+    flags.filterMap fun (set, reason) => if set && !allowed.contains reason then some reason else none
+  (if fact.axioms.isEmpty then [] else [s!"axioms {fact.axioms}"]) ++
+    if !fact.computational then [] else match role with
+      | .spec | .core => raised []
+      | .boundary => if fact.external then [] else ["not an @[extern] binding"]
+      | .shell => raised ["partial", "initializer", "IO", "dbg builtin"]
+      | .tooling => []
 
-@[expose] def DeclarationFact.standard (fact : DeclarationFact) : Bool :=
-  fact.axioms.all standardAxioms.contains
-
-@[expose] def DeclarationFact.admitted (role : Role) (fact : DeclarationFact) : Bool :=
-  fact.standard && (!fact.computational || match role with
-    | .spec | .core => fact.pure
-    | .boundary => fact.external
-    | .shell => !fact.isUnsafe && !fact.external && !fact.replaced
-    | .tooling => true)
-
-@[expose] def Project.check (project : Project) (catalog : Array Name) (inventory : Inventory) :
-    Bool :=
-  decide (project.layers.toList.map (·.1)).Nodup &&
-    catalog.all (fun name =>
-      (project.role? name).isSome && inventory.modules.any (·.name == name)) &&
-    inventory.modules.all project.moduleAdmitted &&
-    inventory.declarations.all fun fact =>
-      match project.role? fact.moduleName with
-      | some role => fact.admitted role
+@[expose] def Project.check (project : Project) (inventory : Inventory) : Bool :=
+  inventory.modules.all project.moduleAdmitted &&
+    inventory.declarations.all fun fact => match project.role? fact.moduleName with
+      | some role => (fact.reasons role).isEmpty
       | none => false
-
-@[expose] def level (premises : Array Premise) : Level :=
-  if premises.all (fun premise => premise.kind == .world || premise.discharged) then .proved
-  else .derived
 
 private theorem permits_inner {source target : Role} (permitted : source.permits target = true)
     (inner : source.Inner) : target.Inner := by
   unfold Role.Inner at *
   rcases inner with rfl | rfl | rfl <;> cases target <;> simp_all [Role.permits]
 
-private theorem modules_admitted {project : Project} {catalog : Array Name}
-    {inventory : Inventory} (accepted : project.check catalog inventory = true) :
-    ∀ fact ∈ inventory.modules, project.moduleAdmitted fact = true := by
-  simp only [Project.check, Bool.and_eq_true, Array.all_eq_true'] at accepted
-  exact accepted.1.2
-
-private theorem source_classified {project : Project} {catalog : Array Name}
-    {inventory : Inventory} (accepted : project.check catalog inventory = true)
-    {source target : Name} (edge : inventory.RuntimeImport source target) :
-    ∃ role, project.role? source = some role := by
-  obtain ⟨fact, member, named, _⟩ := edge
-  have admitted := modules_admitted accepted fact member
-  unfold Project.moduleAdmitted at admitted
-  cases owner : project.role? fact.name with
-  | none => simp [owner] at admitted
-  | some role => exact ⟨role, named ▸ owner⟩
-
-private theorem import_step {project : Project} {catalog : Array Name} {inventory : Inventory}
-    (accepted : project.check catalog inventory = true) {source target : Name} {role : Role}
-    (classified : project.role? source = some role) (inner : role.Inner)
+private theorem import_step {project : Project} {inventory : Inventory}
+    (accepted : project.check inventory = true) {source target : Name}
+    (inner : ∀ role, project.role? source = some role → role.Inner)
     (edge : inventory.RuntimeImport source target) :
     (∀ reached, project.role? target = some reached → reached.Inner) ∧
       (project.role? target = none → project.Trusted target) := by
   obtain ⟨fact, member, named, dependency, imported, target_eq, runtime⟩ := edge
-  have admitted := modules_admitted accepted fact member
-  simp only [Project.moduleAdmitted, named, classified, Bool.and_eq_true,
-    Array.all_eq_true'] at admitted
-  have permitted := admitted.2 dependency imported
-  simp only [Project.admits, runtime, target_eq, Bool.false_or] at permitted
-  constructor
-  · intro reached owner
-    simp only [owner] at permitted
-    exact permits_inner permitted inner
-  · intro owner
-    simp only [owner, Project.trusts] at permitted
-    exact Array.any_eq_true'.mp permitted
+  simp only [Project.check, Bool.and_eq_true, Array.all_eq_true'] at accepted
+  have admitted := accepted.1 fact member
+  unfold Project.moduleAdmitted at admitted
+  rw [named] at admitted
+  cases owner : project.role? source with
+  | none => simp [owner] at admitted
+  | some role =>
+    simp only [owner, Bool.and_eq_true, Array.all_eq_true'] at admitted
+    have permitted := admitted.2 dependency imported
+    simp only [Project.admits, runtime, target_eq, Bool.false_or] at permitted
+    constructor
+    · intro reached found
+      simp only [found] at permitted
+      exact permits_inner permitted (inner role owner)
+    · intro found
+      simp only [found, Project.trusts] at permitted
+      exact Array.any_eq_true'.mp permitted
 
 /-- Once the audit accepts, no chain of runtime imports leads from spec, boundary, or
 core code to the shell or to tooling. -/
-theorem layering_sound (project : Project) (catalog : Array Name) (inventory : Inventory)
-    (accepted : project.check catalog inventory = true) (source target : Name) (role : Role)
+theorem layering_sound (project : Project) (inventory : Inventory)
+    (accepted : project.check inventory = true) (source target : Name) (role : Role)
     (classified : project.role? source = some role) (inner : role.Inner)
     (reaches : Relation.TransGen inventory.RuntimeImport source target) :
     (∀ reached, project.role? target = some reached → reached.Inner) ∧
       (project.role? target = none → project.Trusted target) := by
   induction reaches with
-  | single edge => exact import_step accepted classified inner edge
-  | tail _ edge previous =>
-    obtain ⟨middle, owner⟩ := source_classified accepted edge
-    exact import_step accepted owner (previous.1 middle owner) edge
+  | single edge =>
+    refine import_step accepted (fun found owner => ?_) edge
+    rw [classified] at owner
+    cases owner
+    exact inner
+  | tail _ edge previous => exact import_step accepted previous.1 edge
 
 end LeanEvidence

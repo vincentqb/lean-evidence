@@ -24,43 +24,34 @@ lean_lib «LeanEvidenceManifest»
 
 @[test_driver]
 lean_lib «Tests» where
-  roots := #[`Tests]
   precompileModules := true
   leanOptions := #[⟨`linter.extra.unreachableTactic, false⟩]
-  needs := #[`@/audit]
 
-@[default_target]
-lean_lib «LeanEvidenceAudit»
-
-private def auditPackage (pkg : Package) (entrypoint : System.FilePath) : FetchM (Job Unit) := do
+package_facet leanEvidence pkg : Unit := do
+  let some audit ← findModule? `LeanEvidence.Audit | error "LeanEvidence.Audit is unavailable"
   let mut catalog : Array Name := #[]
-  let mut job := Job.nil
+  let mut job := Job.nil.mix (← audit.leanArts.fetch)
   for lib in pkg.leanLibs do
     unless pkg.defaultTargets.contains lib.name do continue
     for mod in ← (← lib.modules.fetch).await do
-      if catalog.contains mod.name then continue
-      catalog := catalog.push mod.name
-      job := job.mix (← mod.leanArts.fetch)
+      unless catalog.contains mod.name do
+        catalog := catalog.push mod.name
+        job := job.mix (← mod.leanArts.fetch)
   for exe in pkg.leanExes do
     unless pkg.defaultTargets.contains exe.name do continue
-    let imports ← (← exe.root.transImports.fetch).await
-    for mod in imports.push exe.root do
-      if mod.pkg.keyName != pkg.keyName || catalog.contains mod.name then continue
-      catalog := catalog.push mod.name
-      job := job.mix (← mod.leanArts.fetch)
+    for mod in (← (← exe.root.transImports.fetch).await).push exe.root do
+      unless mod.pkg.keyName != pkg.keyName || catalog.contains mod.name do
+        catalog := catalog.push mod.name
+        job := job.mix (← mod.leanArts.fetch)
   let lean ← getLean
-  let workspace ← getWorkspace
-  job.mapM fun _ => do
-    proc {
-      cmd := lean.toString
-      args := #["--run", (pkg.dir / entrypoint).toString] ++ catalog.map Name.toString
-      cwd := some pkg.dir
-      env := workspace.augmentedEnvVars
-    }
-
-package_facet leanEvidence pkg : Unit :=
-  auditPackage pkg "Scripts/Audit.lean"
+  let env := (← getWorkspace).augmentedEnvVars
+  job.mapM fun _ => proc {
+    cmd := lean.toString
+    args := #["--run", (pkg.dir / "Scripts" / "Audit.lean").toString] ++ catalog.map Name.toString
+    cwd := some pkg.dir
+    env
+  }
 
 @[default_target]
-target audit pkg : Unit :=
-  auditPackage pkg.toPackage "LeanEvidenceAudit.lean"
+target audit pkg : Unit := do
+  return (← pkg.toPackage.fetchFacetJob `leanEvidence).map (fun _ => ())

@@ -12,43 +12,26 @@ namespace LeanEvidence
 
 inductive EvidenceKind where
   | test | check | suite
-  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Inhabited, Repr
+  deriving BEq, ReflBEq, LawfulBEq, DecidableEq
 
 structure Evidence where
   claim : Name
   statement : String
   kind : EvidenceKind
-  deriving Inhabited, Repr
+  deriving BEq
 
-initialize claimsExt : SimplePersistentEnvExtension (Name × ClaimKind)
-    (Std.HashMap Name ClaimKind) ←
-  registerSimplePersistentEnvExtension {
-    addEntryFn := fun claims (name, kind) => claims.insert name kind
-    addImportedFn := fun entries => entries.foldl (init := {}) fun claims module =>
-      module.foldl (init := claims) fun claims (name, kind) => claims.insert name kind
-  }
+initialize claimsExt : SimplePersistentEnvExtension (Name × ClaimKind) (Array (Name × ClaimKind)) ←
+  registerSimplePersistentEnvExtension { addEntryFn := Array.push, addImportedFn := Array.flatten }
 
-initialize evidenceExt : SimplePersistentEnvExtension Evidence
-    (Std.HashMap Name (Array Evidence)) ←
-  registerSimplePersistentEnvExtension {
-    addEntryFn := fun found entry =>
-      found.insert entry.claim ((found[entry.claim]?).getD #[] |>.push entry)
-    addImportedFn := fun entries => entries.foldl (init := {}) fun found module =>
-      module.foldl (init := found) fun found entry =>
-        found.insert entry.claim ((found[entry.claim]?).getD #[] |>.push entry)
-  }
+initialize evidenceExt : SimplePersistentEnvExtension Evidence (Array Evidence) ←
+  registerSimplePersistentEnvExtension { addEntryFn := Array.push, addImportedFn := Array.flatten }
+
+def registeredClaims (env : Environment) : Array (Name × ClaimKind) := claimsExt.getState env
 
 def claimKind? (env : Environment) (name : Name) : Option ClaimKind :=
-  (claimsExt.getState env)[name]?
+  (registeredClaims env).findSome? fun (claim, kind) => if claim == name then some kind else none
 
-def registeredClaims (env : Environment) : Array (Name × ClaimKind) :=
-  (claimsExt.getState env).toArray
-
-def evidenceFor (env : Environment) (claim : Name) : Array Evidence :=
-  (evidenceExt.getState env)[claim]?.getD #[]
-
-def allEvidence (env : Environment) : Array Evidence :=
-  (evidenceExt.getState env).fold (init := #[]) fun found _ entries => found ++ entries
+def allEvidence (env : Environment) : Array Evidence := evidenceExt.getState env
 
 def nonstandardAxioms (name : Name) : CoreM (Array Name) :=
   return (← collectAxioms name).filter (!standardAxioms.contains ·)
@@ -97,10 +80,11 @@ elab "Test " claim:term " : " inst:term " := " proof:term : command => do
   requireInstance claim inst
   let env ← getEnv
   let mut index := 1
-  while env.contains (head ++ Name.mkSimple s!"test_{index}") do index := index + 1
+  while env.contains (mkPrivateName env (head ++ Name.mkSimple s!"test_{index}")) do
+    index := index + 1
   let name := head ++ Name.mkSimple s!"test_{index}"
-  checked (← `(public theorem $(mkIdent (rootNamespace ++ name)) : $inst := $proof))
-  let axioms ← liftCoreM <| nonstandardAxioms name
+  checked (← `(private theorem $(mkIdent (rootNamespace ++ name)) : $inst := $proof))
+  let axioms ← liftCoreM <| nonstandardAxioms (mkPrivateName env name)
   unless axioms.isEmpty do
     throwError "A Test must be kernel-checked; it depends on {axioms}. Use Check to run code."
   record head inst .test

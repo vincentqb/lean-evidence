@@ -38,8 +38,6 @@ theorem even_four : EvenFour := rfl
 
 Test Identity identity : identity 3 = 3 := by decide
 
-theorem uses_world (agrees : SuccAgrees) : successor 1 = 2 := agrees 1
-
 theorem uses_open (h : Identity identity) : identity 5 = 5 := h 5
 
 theorem uses_discharged (h : EvenFour) : 4 % 2 = 0 := h
@@ -47,5 +45,11 @@ theorem uses_discharged (h : EvenFour) : 4 % 2 = 0 := h
 theorem uses_unchecked (h : Unchecked) : wrongSucc 0 = 1 := h 0
 
 theorem uses_live (now : Nat → Nat) (h : ClockAdvances now) (t : Nat) : t ≤ now t := h t
+
+theorem bounded (n : Nat) (h : n < 5) : n < 6 := by omega
+
+theorem uses_unnamed (h : 1 = 2) : 1 = 2 := h
+
+Conjecture CoreClaim := 1 = 1
 
 end Tests.Fixtures

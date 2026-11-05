@@ -29,7 +29,9 @@ def fast (n : Nat) : Nat := n + 1
 
 def traced (n : Nat) : Nat := dbgTrace "side effect" fun _ => n
 
-def throughShell (n : Nat) : IO Unit := Tests.Fixtures.report n
+def traceValue (n : Nat) : Nat := dbgTraceVal n
+
+def viaShell : IO Unit := Tests.Fixtures.report 0
 
 axiom raw : False
 
