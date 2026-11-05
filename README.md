@@ -1,8 +1,8 @@
 # LeanEvidence
 
 For software written in **Lean 4.35.0**: state the theorems you never want to lose in files
-agents cannot edit, and let the build check that the code still proves them and that the
-proofs cover the code that runs.
+agents cannot edit; `lake comparator` checks that the code still proves them, and
+`lake build` checks that the code they constrain is the code that runs.
 
 ## Files
 
@@ -13,7 +13,7 @@ proofs cover the code that runs.
 | `MyApp/Core/…` | pure code: public interface, private helpers, and their proofs | agents |
 | `MyApp/Shell.lean` | IO that connects the core to the world | agents |
 | `Manifest.lean` | headline theorems, stated with `sorry` | you |
-| `Claims.lean` | proofs of the headline theorems | agents |
+| `MyApp/Claims.lean` | proofs of the headline theorems | agents |
 | `comparator.json` | the headlines and the functions they constrain | you |
 | `Scripts/Audit.lean` | the role of each module prefix | you |
 
@@ -24,14 +24,16 @@ says the shell prints the true value of an expression, assuming native addition 
 ## Syntax
 
 ```lean
+public meta import LeanEvidence
+
 /-- The runtime's native addition agrees with `Nat.add`. A different sum for any pair
 falsifies it. -/
 WorldClaim NativeAddAgrees := ∀ a b, nativeAdd a b = a + b
-Check NativeAddAgrees : nativeAdd (2 ^ 70) 1 = 2 ^ 70 + 1
+Check NativeAddAgrees : nativeAdd (2 ^ 70) (2 ^ 70) = 2 ^ 71
 @[exercises NativeAddAgrees] def nativeAddSuite : IO Unit := ...
 
 Conjecture Normalizes (optimize : Expr → Expr) := ∀ e, normal (optimize e) = true
-Test Normalizes fold : normal (fold (.add (.add (.lit 1) (.lit 2)) (.lit 3))) = true := by decide
+Test Normalizes fold : normal (fold (.add (.add (.lit 1) (.lit 2)) (.var 0))) = true := by decide
 
 theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
     Shell.output e = toString (eval (fun _ => 0) e)
@@ -40,7 +42,7 @@ theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
 - `WorldClaim Name := P` names an assumption about the world; its doc comment names the
   observation that would falsify it.
 - `Check Claim : instance` runs one instance of a claim during the build, foreign code included.
-- `@[exercises Claim]` marks a live suite that exercises a claim while the program runs.
+- `@[exercises Claim]` marks a live suite in a shell module that exercises a claim.
 - `Conjecture Name := P` names a claim not yet proved; a theorem of type `Name` discharges it.
 - `Test Claim : instance := proof` proves one instance of a claim in the kernel.
 - A headline takes the claims it rests on as hypotheses; `lake build` reports it proved (●)
@@ -58,7 +60,7 @@ require lean_evidence from git "https://github.com/vincentqb/lean-evidence" @ "m
 
 @[default_target]
 target audit pkg : Unit := do
-  return (← pkg.toPackage.fetchFacetJob `leanEvidence).map (fun _ => ())
+  return (← pkg.fetchFacetJob `leanEvidence).map (fun _ => ())
 ```
 
 In `Scripts/Audit.lean`, the longest matching prefix gives each module its role:
@@ -66,38 +68,36 @@ In `Scripts/Audit.lean`, the longest matching prefix gives each module its role:
 ```lean
 module
 public meta import LeanEvidence.Audit
-public section
-meta section
-open LeanEvidence
 
-def main (args : List String) : IO Unit :=
-  Audit.run {
-    layers := #[(`MyApp, .tooling), (`MyApp.Spec, .spec), (`MyApp.Boundary, .boundary),
-      (`MyApp.Core, .core), (`MyApp.Shell, .shell)]
-  } (args.toArray.map String.toName)
+public meta def main : List String → IO Unit := LeanEvidence.Audit.run {
+  layers := #[(`MyApp, .tooling), (`MyApp.Spec, .spec), (`MyApp.Boundary, .boundary),
+    (`MyApp.Core, .core), (`MyApp.Shell, .shell)] }
 ```
 
-- `.spec` and `.boundary` modules hold what you own; boundary code is `@[extern]` only.
-- `.core` code is pure and total: no `partial`, `unsafe`, `@[extern]`, `@[implemented_by]`,
+- `.spec` and `.core` code is pure: no `partial`, `unsafe`, `@[extern]`, `@[implemented_by]`,
   initializers, IO, or `dbg*`.
-- `.shell` code may do IO but reaches foreign code only through the boundary.
-- `.tooling` covers proofs and scripts, which runtime code never imports.
+- `.boundary` code is `@[extern]` declarations only.
+- `.shell` code may do IO but not `unsafe`, `@[extern]`, or `@[implemented_by]`.
+- `.tooling` covers `Claims` and scripts; like every role, it may use only standard axioms.
+- Non-`meta` imports run from tooling to shell to core to spec and boundary, never back;
+  other libraries must be listed in `trusted`, which defaults to `Init`, `Std`, and `Lean`.
 
-`Manifest.lean` imports only spec modules, states each headline with `sorry`, and declares
-each function a headline mentions as a hole, `def name : Type := sorry`; `comparator.json`
-lists the headlines and holes. Keep `Manifest` out of the default targets.
+`Manifest.lean` imports only spec and boundary modules and declares each core or shell
+function a headline mentions as a hole with the code's exact type, `def name : T := sorry`;
+[`comparator.json`](comparator.json) lists the headlines and holes. Put `Claims` in a
+default target, and declare `Manifest` as a `lean_lib` that is not one. The audit imports
+every module of the default targets into one environment, so only one of them may define
+`main`.
 
 ## Run
 
 ```sh
 lake build        # audit and headline report
 lake test         # your tests, including the live suites
-lake comparator   # Claims.lean proves exactly the statements in Manifest.lean
+lake comparator   # MyApp/Claims.lean proves exactly the statements in Manifest.lean
 ```
 
 Make the files you own read-only for agents, along with `lakefile.lean` and
-`lake-manifest.json`. `Check` on foreign code needs `precompileModules`; where the bundled
-clang cannot run, set `LEAN_CC`. `lake comparator` replays the headline proofs through the
-kernel in a separate process, which rejects proofs that skipped the kernel during the build;
-its bwrap sandbox matters only when judging code you did not write, and
-`--inadvisably-no-sandbox` turns it off.
+`lake-manifest.json`. `Check` on foreign code needs `precompileModules`. `lake comparator`
+replays the headline proofs through the kernel in a separate process, which rejects proofs
+that skipped the kernel during the build.
