@@ -18,8 +18,10 @@ Lean's module system already keeps helpers private, hides unexposed bodies, and 
 proofs and `meta` code out of binaries. The audit adds the rest: every module has a role,
 runtime imports never leave spec/boundary/core for the shell, spec and core code has no
 escape hatch (`partial`, `unsafe`, `@[extern]`, `@[implemented_by]`, initializers, IO,
-`dbgTrace`), and only standard axioms appear. `LeanEvidence/Claims.lean` proves these rules
-transitive and sound; [`LeanEvidenceManifest/Library.lean`](LeanEvidenceManifest/Library.lean) states them.
+`dbgTrace`), and only standard axioms appear. `layering_sound` in
+[`LeanEvidence/Policy.lean`](LeanEvidence/Policy.lean) proves the per-module import rule
+transitive: once the audit accepts, no runtime import chain leads from spec, boundary, or core
+to the shell.
 
 The [constant-folding template](Examples/ConstantFolding) shows each piece:
 

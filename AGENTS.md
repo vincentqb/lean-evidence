@@ -4,10 +4,9 @@ Use the Lean version pinned in `lean-toolchain`; remove compatibility paths when
 Use `module`, export the interface with `public`, `@[expose]` only bodies clients must
 unfold, keep elaborators in `meta` sections, and keep `autoImplicit` off.
 
-Do not edit `LeanEvidence/Spec.lean`, `LeanEvidenceManifest.lean`, `LeanEvidenceManifest/`,
-`comparator.json`, `Examples/ConstantFolding/Spec.lean`, or
-`Examples/ConstantFolding/Boundary.lean`. They are the statements this repository is held
-to; propose changes instead.
+Do not edit `LeanEvidenceManifest.lean`, `comparator.json`,
+`Examples/ConstantFolding/Spec.lean`, or `Examples/ConstantFolding/Boundary.lean`. They are
+the statements the template is held to; propose changes instead.
 
 Write claims that cannot be gamed:
 
@@ -22,5 +21,6 @@ Write claims that cannot be gamed:
 - Keep effects in the shell and decisions in the core; foreign code enters only through
   `@[extern]` declarations in a boundary module.
 
-When changing a check, update `Tests/` and the proofs in `LeanEvidence/Claims.lean`.
+When changing a check, update `Tests/` and keep `layering_sound` in `LeanEvidence/Policy.lean`
+proved.
 Validate with `lake build`, `lake test`, and `lake comparator`.

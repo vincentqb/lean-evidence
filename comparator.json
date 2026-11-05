@@ -1,19 +1,13 @@
 {
   "challenge_module": "LeanEvidenceManifest",
-  "solution_module": "LeanEvidenceClaims",
+  "solution_module": "Examples.ConstantFolding.Claims",
   "theorem_names": [
-    "LeanEvidence.classification_complete",
-    "LeanEvidence.layering_sound",
-    "LeanEvidence.purity_sound",
-    "LeanEvidence.level_proved_iff",
     "Examples.ConstantFolding.fold_preserves_meaning",
     "Examples.ConstantFolding.fold_closed_literal",
     "Examples.ConstantFolding.fold_idempotent",
     "Examples.ConstantFolding.output_correct"
   ],
   "definition_names": [
-    "LeanEvidence.Project.check",
-    "LeanEvidence.level",
     "Examples.ConstantFolding.fold",
     "Examples.ConstantFolding.Shell.output"
   ],

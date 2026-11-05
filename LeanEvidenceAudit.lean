@@ -12,14 +12,12 @@ namespace LeanEvidenceAudit
 def project : Project := {
   layers := #[
     (`LeanEvidence, .tooling),
-    (`LeanEvidence.Spec, .spec),
     (`LeanEvidence.Policy, .core),
     (`Examples, .tooling),
     (`Examples.ConstantFolding.Spec, .spec),
     (`Examples.ConstantFolding.Boundary, .boundary),
     (`Examples.ConstantFolding.Core, .core),
     (`Examples.ConstantFolding.Shell, .shell),
-    (`LeanEvidenceClaims, .tooling),
     (`LeanEvidenceAudit, .tooling)
   ]
   trusted := #[`Init, `Std, `Lean]

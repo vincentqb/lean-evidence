@@ -20,11 +20,7 @@ lean_lib «Examples» where
   globs := #[.submodules `Examples]
   precompileModules := true
 
-@[default_target]
-lean_lib «LeanEvidenceClaims»
-
-lean_lib «LeanEvidenceManifest» where
-  globs := #[.one `LeanEvidenceManifest, .submodules `LeanEvidenceManifest]
+lean_lib «LeanEvidenceManifest»
 
 @[test_driver]
 lean_lib «Tests» where

@@ -1,6 +1,6 @@
 module
 
-public meta import LeanEvidence.Spec
+public meta import LeanEvidence.Policy
 public meta import Lean
 
 public section
