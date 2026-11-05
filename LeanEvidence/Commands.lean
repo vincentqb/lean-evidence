@@ -49,12 +49,12 @@ private def declareClaim (doc? : Option (TSyntax `Lean.Parser.Command.docComment
   let name ← resolveGlobalConstNoOverload n
   modifyEnv (claimsExt.addEntry · (name, kind))
 
-elab doc?:(docComment)? "WorldClaim " n:ident bs:bracketedBinder* " := " t:term : command => do
+elab doc?:(docComment)? "WorldClaim " n:ident bs:(ppSpace bracketedBinder)* " := " t:term : command => do
   unless doc?.isSome do
     throwError "WorldClaim {n} needs a doc comment naming the observation that would falsify it"
   declareClaim doc? n bs t .world
 
-elab doc?:(docComment)? "Conjecture " n:ident bs:bracketedBinder* " := " t:term : command =>
+elab doc?:(docComment)? "Conjecture " n:ident bs:(ppSpace bracketedBinder)* " := " t:term : command =>
   declareClaim doc? n bs t .conjecture
 
 private def claimHead (claim : Term) : CommandElabM Name := liftTermElabM do
