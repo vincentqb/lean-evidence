@@ -4,7 +4,7 @@ Use the Lean version pinned in `lean-toolchain`; remove compatibility paths when
 Use `module`, export the interface with `public`, `@[expose]` only bodies clients must
 unfold, keep elaborators in `meta` sections, and keep `autoImplicit` off.
 
-Do not edit `LeanEvidenceManifest.lean`, `comparator.json`, `Scripts/Audit.lean`,
+Do not edit `LeanEvidenceManifest.lean`, `comparator.json`, `Audit.lean`,
 `Examples/ConstantFolding/Spec.lean`, or `Examples/ConstantFolding/Boundary.lean`; propose
 changes instead.
 

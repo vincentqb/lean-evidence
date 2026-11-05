@@ -63,7 +63,7 @@ def collect (name : Name) : CoreM (ModuleFact × Array DeclarationFact) := do
 def withEnvironment {α : Type} (modules : Array Name) (action : CoreM α) : IO α := do
   unsafe enableInitializersExecution
   let env ← importModules (modules.map ({ module := · })) {} (loadExts := true)
-  let (result, _) ← action.toIO { fileName := "<lean-evidence>", fileMap := default } { env }
+  let (result, _) ← action.toIO { fileName := "<lean-evidence>", fileMap := default, maxHeartbeats := 0 } { env }
   return result
 
 def violations (project : Project) (inventory : Inventory) : Array String := Id.run do

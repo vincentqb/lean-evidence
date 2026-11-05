@@ -38,7 +38,7 @@ package_facet leanEvidence pkg : Unit := do
         job := job.mix (← mod.leanArts.fetch)
   job.mapM fun _ => do proc {
     cmd := (← getLean).toString
-    args := #["--run", (pkg.dir / "Scripts" / "Audit.lean").toString] ++ catalog.map Name.toString
+    args := #["--run", (pkg.dir / "Audit.lean").toString] ++ catalog.map Name.toString
     cwd := some pkg.dir
     env := ← getAugmentedEnv
   }

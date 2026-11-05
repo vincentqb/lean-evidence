@@ -15,7 +15,7 @@ agents cannot edit; `lake comparator` checks that the code still proves them, an
 | `Manifest.lean` | headline theorems, stated with `sorry` | you |
 | `MyApp/Claims.lean` | proofs of the headline theorems | agents |
 | `comparator.json` | the headlines and the functions they constrain | you |
-| `Scripts/Audit.lean` | the role of each module prefix | you |
+| `Audit.lean` | the role of each module prefix | you |
 
 Headlines are end-to-end theorems: they say what the program does in terms of the spec,
 assuming only named claims. In the [template](Examples/ConstantFolding), `output_correct`
@@ -63,7 +63,7 @@ target audit pkg : Unit := do
   return (← pkg.fetchFacetJob `leanEvidence).map (fun _ => ())
 ```
 
-In `Scripts/Audit.lean`, the longest matching prefix gives each module its role:
+In `Audit.lean`, the longest matching prefix gives each module its role:
 
 ```lean
 module
