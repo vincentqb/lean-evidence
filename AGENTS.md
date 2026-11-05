@@ -16,6 +16,8 @@ Write claims that cannot be gamed:
   its specification, or weaken a statement until it passes.
 - Assumptions are `WorldClaim` hypotheses, never `axiom`s. A world assumption that cannot
   hold makes every theorem using it vacuous.
+- A premise must be strictly smaller than the headline it supports; a conjecture that
+  restates the headline makes the headline derived in name only.
 - A `Test`, `Check`, or `@[exercises]` suite is evidence for a claim, not a proof. Unproved
   claims stay `Conjecture`s; never use `sorry` or `native_decide` outside `Check`, and never
   mark a suite that does not exercise its claim.
