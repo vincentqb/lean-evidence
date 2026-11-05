@@ -97,5 +97,7 @@ lake comparator   # Claims.lean proves exactly the statements in Manifest.lean
 
 Make the files you own read-only for agents, along with `lakefile.lean` and
 `lake-manifest.json`. `Check` on foreign code needs `precompileModules`; where the bundled
-clang cannot run, set `LEAN_CC` and build the manifest before `lake comparator`. Use
-`lake check --paranoid` in CI.
+clang cannot run, set `LEAN_CC`. `lake comparator` replays the headline proofs through the
+kernel in a separate process, which rejects proofs that skipped the kernel during the build;
+its bwrap sandbox matters only when judging code you did not write, and
+`--inadvisably-no-sandbox` turns it off.
