@@ -49,7 +49,8 @@ so the audit sees them. The audit reports each headline:
 ```
 
 A headline is proved (●) when every premise is a world assumption or a proved conjecture.
-Every world assumption needs a `Test`, `Check`, or live suite.
+Every world assumption needs a `Test`, `Check`, or live suite, and every hypothesis that
+mentions no variable of the statement must be a claim, so no assumption hides as a plain `Prop`.
 
 ## Use it
 
@@ -73,8 +74,7 @@ open LeanEvidence
 def main (args : List String) : IO Unit :=
   Audit.run {
     layers := #[(`MyApp, .tooling), (`MyApp.Spec, .spec), (`MyApp.Boundary, .boundary),
-      (`MyApp.Core, .core), (`MyApp.Shell, .shell), (`Scripts, .tooling)]
-    trusted := #[`Init, `Std, `Lean, `LeanEvidence]
+      (`MyApp.Core, .core), (`MyApp.Shell, .shell)]
   } (args.toArray.map String.toName)
 ```
 
@@ -90,5 +90,6 @@ lake build && lake test && lake comparator
 ```
 
 `Check`s on foreign code compile the boundary natively (`precompileModules`). Where the
-bundled clang cannot run, set `LEAN_CC`. Use `lake check --paranoid` in CI to replay the
-build through Lean's independent kernels.
+bundled clang cannot run, set `LEAN_CC` and build the challenge module before
+`lake comparator`, whose sandbox then reuses the native artifacts. Use `lake check --paranoid`
+in CI to replay the build through Lean's independent kernels.
