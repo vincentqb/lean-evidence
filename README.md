@@ -1,98 +1,90 @@
 # LeanEvidence
 
-Compiled architecture and required evidence for **Lean 4.35.0**. `lake build`
-checks every production module, including private code and compiler replacements,
-and verifies that each required proposition has its registered proof or test.
+Keep the claims you do not want to lose, for software written in **Lean 4.35.0**.
+Headline theorems live in a protected `Manifest.lean`; `lake comparator` checks that the
+implementation proves exactly those statements. Assumptions about the outside world and
+unfinished claims are hypotheses of those theorems, so nothing uses `sorry` and the report
+reads each headline's evidence from its type. `lake build` audits what Lean does not enforce.
 
-In `MyLib/Core.lean`, state requirements separately from their witnesses:
+| Role | Holds | Known correct by |
+|---|---|---|
+| `spec` | types, reference semantics, `WorldClaim`s, `Conjecture`s | you |
+| `boundary` | `@[extern]` declarations only | assumptions, checked at build time |
+| `core` | pure, total code: public interface, private helpers, proofs | kernel proofs |
+| `shell` | IO glue; decisions belong in core | E2E tests |
+| `tooling` | headline proofs, audits, scripts | never reached at runtime |
+
+Lean's module system already keeps helpers private, hides unexposed bodies, and keeps
+proofs and `meta` code out of binaries. The audit adds the rest: every module has a role,
+runtime imports never leave spec/boundary/core for the shell, spec and core code has no
+escape hatch (`partial`, `unsafe`, `@[extern]`, `@[implemented_by]`, initializers, IO,
+`dbgTrace`), and only standard axioms appear. `LeanEvidence/Claims.lean` proves these rules
+transitive and sound; [`LeanEvidenceManifest/Library.lean`](LeanEvidenceManifest/Library.lean) states them.
+
+The [constant-folding template](Examples/ConstantFolding) shows each piece:
 
 ```lean
-module
-public meta import LeanEvidence
-public section
-namespace MyLib
-open LeanEvidence
+/-- The runtime's native addition agrees with `Nat.add`. A different sum for any pair
+falsifies it. -/
+WorldClaim NativeAddAgrees := ∀ a b, nativeAdd a b = a + b
+Check NativeAddAgrees : nativeAdd (2 ^ 70) 1 = 2 ^ 70 + 1
 
-@[expose] def advance (n : Nat) : Nat := n + 1
-ProvenTheorem advance_spec : Contract advance (fun f => ∀ n, n < f n) := by
-  intro n
-  exact Nat.lt_succ_self n
-UnitTest advance_zero : advance 0 = 1
+Conjecture Normalizes (optimize : Expr → Expr) := ∀ e, normal (optimize e) = true
+Test Normalizes fold : normal (fold (.add (.lit 1) (.lit 2))) = true := by decide
 
-Requirements obligations where
-  proof increasing : ∀ n : Nat, n < advance n := advance_spec
-  test zero : advance 0 = 1 := advance_zero
-end MyLib
+theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
+    Shell.output e = toString (eval (fun _ => 0) e)
 ```
 
-Re-export it from `MyLib.lean`:
+`Test` proves an instance in the kernel; `Check` compiles and runs it during the build,
+including foreign code. The audit reports each headline:
 
-```lean
-module
-public import MyLib.Core
+```text
+◕ Examples.ConstantFolding.fold_idempotent  (open Examples.ConstantFolding.Normalizes [2 tests, 0 checks])
+● Examples.ConstantFolding.output_correct  (world Examples.ConstantFolding.NativeAddAgrees [0 tests, 2 checks])
 ```
 
-Omit `:= witness` to record an outstanding requirement. Completion, outstanding
-claims, and the theorem index are derived from the selected compiled inventories.
-Specifications remain the author's responsibility; the
-[constant-folding example](Examples/ConstantFolding/Contracts.lean) uses independent semantics.
+A headline is proved (●) when every premise is a world assumption or a proved conjecture.
+Every world assumption needs a `Test` or `Check`.
 
-In `lakefile.lean`, add the dependency and shared audit facet:
+## Use it
 
 ```lean
-require lean_evidence from git
-  "https://github.com/vincentqb/lean-evidence" @ "main"
-
-package my_lib where
-  leanOptions := #[⟨`autoImplicit, false⟩]
-
-lean_lib MyLib where
-  globs := #[.one `MyLib, .submodules `MyLib]
-lean_lib Scripts where
-  globs := #[.submodules `Scripts]
+require lean_evidence from git "https://github.com/vincentqb/lean-evidence" @ "main"
 
 @[default_target]
 target audit pkg : Unit := do
   return (← pkg.toPackage.fetchFacetJob `leanEvidence).map (fun _ => ())
 ```
 
-In `Scripts/Audit.lean`, classify every production module and select requirements:
+`Scripts/Audit.lean` assigns roles by module prefix; the longest prefix wins:
 
 ```lean
 module
-public meta import LeanEvidence
+public meta import LeanEvidence.Audit
 public section
 meta section
-open Lean LeanEvidence
-
-def project : Project := {
-  modules := #[⟨`MyLib, .core⟩, ⟨`MyLib.Core, .core⟩, ⟨`Scripts.Audit, .tooling⟩]
-  requirements := #[`MyLib.obligations]
-  trusted := #[`Init, `Std, `Lean, `LeanEvidence]
-}
+open LeanEvidence
 
 def main (args : List String) : IO Unit :=
-  Audit.run project (args.toArray.map String.toName)
+  Audit.run {
+    layers := #[(`MyApp, .tooling), (`MyApp.Spec, .spec), (`MyApp.Boundary, .boundary),
+      (`MyApp.Core, .core), (`MyApp.Shell, .shell), (`Scripts, .tooling)]
+    trusted := #[`Init, `Std, `Lean, `LeanEvidence]
+  } (args.toArray.map String.toName)
 ```
 
-The `core` is safe, total, and free of IO and initializers; public functions need
-a kernel-checked `Contract`. Effects belong in `adapter` modules. A `foreign`
-binding requires a pure model, a universal `WorldClaim` of agreement, and a native
-`ConformanceFixture`. Tooling is `meta`. Use `module` and `public` for API boundaries,
-and `import all` in proof modules that need private bodies. Import LeanEvidence with
-`meta` to keep auditing, inventories, and test receipts out of runtime dependencies;
-proofs erase. Programs that execute the policy checkers can import
-`LeanEvidence.Policy` directly.
+`Manifest.lean` imports only spec modules, states each headline with `sorry`, and declares
+the implementation functions it mentions as definition holes. `comparator.json` names the
+headlines and holes; `Claims.lean`, a default target, proves them. Keep `Manifest` out of the
+default targets, and make `Spec`, `Boundary`, `Manifest`,
+`comparator.json`, `Scripts/Audit.lean`, `lakefile.lean`, and `lake-manifest.json` read-only
+for agents.
 
 ```sh
-lake build
-lake lint
-lake test
+lake build && lake test && lake comparator
 ```
 
-Lake supplies the audit's module catalog. Run other scripts with
-`lake env lean --run path/to/Script.lean ...`.
-
-`LeanEvidence/` is the library, `Examples/` the template, and `Tests/` the regression
-suite. This repository audits its own requirements and proves its policy checkers
-and JSON fields correct. Reflection, compilation, and native execution remain trusted.
+`Check`s on foreign code compile the boundary natively (`precompileModules`). Where the
+bundled clang cannot run, set `LEAN_CC`. Use `lake check --paranoid` in CI to replay the
+build through Lean's independent kernels.

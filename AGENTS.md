@@ -1,25 +1,26 @@
 # Working on LeanEvidence
 
-Use the stable Lean version pinned in `lean-toolchain`. This project supports
-that version only; remove obsolete compatibility paths when upgrading.
+Use the Lean version pinned in `lean-toolchain`; remove compatibility paths when upgrading.
+Use `module`, export the interface with `public`, `@[expose]` only bodies clients must
+unfold, keep elaborators in `meta` sections, and keep `autoImplicit` off.
 
-Use `README.md` and the compiled `Examples/ConstantFolding/` example as the
-authoring reference: precise statements, independent semantics, and explicit proofs.
+Do not edit `LeanEvidence/Spec.lean`, `LeanEvidenceManifest.lean`, `LeanEvidenceManifest/`,
+`comparator.json`, `Examples/ConstantFolding/Spec.lean`, or
+`Examples/ConstantFolding/Boundary.lean`. They are the statements this repository is held
+to; propose changes instead.
 
-Use Lean's `module` system. Export the intended API with `public`; expose
-definition bodies with `@[expose]` only when clients need reduction. Elaboration
-helpers belong in `meta` sections. Proof modules may use `import all` to inspect
-implementation bodies in this package. Keep `autoImplicit` disabled and the
-macro dependency graph acyclic.
+Write claims that cannot be gamed:
 
-Keep the computational core pure and effects in adapters. Represent external
-behavior as explicit `WorldClaim` hypotheses; keep runtime conformance evidence
-distinct from kernel proofs of the Lean model. Avoid incidental comments.
+- A headline must fail for a trivial implementation; constant folding states that closed
+  expressions become literals so that `fold := id` fails.
+- A statement says what its name says. Never state `True`, restate the implementation as
+  its specification, or weaken a statement until it passes.
+- Assumptions are `WorldClaim` hypotheses, never `axiom`s. A world assumption that cannot
+  hold makes every theorem using it vacuous.
+- A `Test` or `Check` is evidence for a claim, not a proof. Unproved claims stay
+  `Conjecture`s; never use `sorry` or `native_decide` outside `Check`.
+- Keep effects in the shell and decisions in the core; foreign code enters only through
+  `@[extern]` declarations in a boundary module.
 
-When changing an evidence check, update its regression tests and library contracts.
-A test receipt, lint result, or prose assertion is not a proof of
-an implementation contract. Never replace missing formalization with `True` or
-a `sorry` theorem labelled as proved.
-
-Validate with `lake build` and `lake test`. Tests intentionally exercise
-rejected proofs and assumptions, so they are separate from the default libraries.
+When changing a check, update `Tests/` and the proofs in `LeanEvidence/Claims.lean`.
+Validate with `lake build`, `lake test`, and `lake comparator`.
