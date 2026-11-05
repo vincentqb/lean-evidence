@@ -17,22 +17,58 @@ private def computational (info : ConstantInfo) : MetaM Bool := do
   if ← Meta.isProp info.type then return false
   Meta.forallTelescopeReducing info.type fun _ result => return !(← Meta.whnf result).isSort
 
-private def effects (env : Environment) (type : Expr) : Bool := Id.run do
-  let mut pending := type.getUsedConstants
+/-- The constants from which `IO.RealWorld` is reachable through constructors and definition
+bodies, starting from the types of `infos`: a walk forward records the users of each constant,
+then a walk back from `IO.RealWorld` collects every user. -/
+private def effectful (env : Environment) (infos : Array ConstantInfo) : NameSet := Id.run do
+  let mut pending := infos.flatMap (·.type.getUsedConstants)
   let mut seen : NameSet := {}
+  let mut users : Std.HashMap Name (Array Name) := {}
   while !pending.isEmpty do
     let name := pending.back!
     pending := pending.pop
     if seen.contains name then continue
     seen := seen.insert name
-    if name == ``IO.RealWorld then return true
-    if let some info := env.find? name then
-      if let .inductInfo ind := info then pending := pending ++ ind.ctors.toArray
-      if let .ctorInfo constructor := info then pending := pending ++ constructor.type.getUsedConstants
-      if let some body := info.value? (allowOpaque := true) then pending := pending ++ body.getUsedConstants
-  return false
+    let uses := match env.find? name with
+      | some (.inductInfo ind) => ind.ctors.toArray
+      | some (.ctorInfo constructor) => constructor.type.getUsedConstants
+      | some info => ((info.value? (allowOpaque := true)).map (·.getUsedConstants)).getD #[]
+      | none => #[]
+    for used in uses do users := users.insert used ((users.getD used #[]).push name)
+    pending := pending ++ uses
+  let mut reached : NameSet := {}
+  pending := #[``IO.RealWorld]
+  while !pending.isEmpty do
+    let name := pending.back!
+    pending := pending.pop
+    if reached.contains name then continue
+    reached := reached.insert name
+    pending := pending ++ users.getD name #[]
+  return reached
 
-private def declaration (info : ConstantInfo) (moduleName : Name) : CoreM DeclarationFact := do
+/-- The nonstandard axioms `name` depends on. An olean records the axioms of each declaration it
+exports, so only private declarations are walked, each once; a cycle back to `name` contributes
+nothing. -/
+private partial def axiomsOf (name : Name) :
+    StateRefT (Std.HashMap Name (Array Name)) CoreM (Array Name) := do
+  if let some found := (← get)[name]? then return found
+  modify (·.insert name #[])
+  let found ← if !isPrivateName name then nonstandardAxioms name else
+    match (← getEnv).find? name with
+    | none => pure #[]
+    | some info => do
+      let mut found := if info.isAxiom && !standardAxioms.contains name then #[name] else #[]
+      let uses := info.type.getUsedConstants ++
+        ((info.value? (allowOpaque := true)).map (·.getUsedConstants)).getD #[] ++
+        match info with | .inductInfo ind => ind.ctors.toArray | _ => #[]
+      for used in uses do
+        found := found ++ (← axiomsOf used).filter (!found.contains ·)
+      pure found
+  modify (·.insert name found)
+  return found
+
+private def declaration (reachesIO : NameSet) (info : ConstantInfo) (moduleName : Name) :
+    StateRefT (Std.HashMap Name (Array Name)) CoreM DeclarationFact := do
   let env ← getEnv
   let generated := (← findDeclarationRangesCore? info.name).isNone
   let isComputational ← Meta.MetaM.run' <| computational info
@@ -46,19 +82,26 @@ private def declaration (info : ConstantInfo) (moduleName : Name) : CoreM Declar
     external := isExtern env info.name
     replaced := (Compiler.getImplementedBy? env info.name).isSome
     initializes := (getInitFnNameFor? env info.name).isSome
-    effects := isComputational && effects env info.type
+    effects := isComputational && info.type.getUsedConstants.any reachesIO.contains
     debug := info.getUsedConstantsAsSet.any fun n => n.isAtomic && "dbg".isPrefixOf n.toString
-    axioms := ← nonstandardAxioms info.name
+    axioms := ← axiomsOf info.name
   }
 
-def collect (name : Name) : CoreM (ModuleFact × Array DeclarationFact) := do
+/-- Facts about each module of `catalog` and every declaration it compiles. -/
+def collect (catalog : Array Name) : CoreM Inventory := do
   modifyEnv (·.setExporting false)
   let env ← getEnv
-  let some idx := env.getModuleIdx? name | throwError "Compiled module {name} is unavailable"
-  let data := env.header.moduleData[idx.toNat]!
-  let declarations ← data.constants.mapM fun info => withCurrHeartbeats <| declaration info name
-  let imports := data.imports.map fun i => { name := i.module, comptime := i.isMeta }
-  return ({ name, usesModuleSystem := data.isModule, imports }, declarations)
+  let modules ← catalog.mapM fun name => do
+    let some idx := env.getModuleIdx? name | throwError "Compiled module {name} is unavailable"
+    return (name, env.header.moduleData[idx.toNat]!)
+  let reachesIO := effectful env (modules.flatMap (·.2.constants))
+  let declarations ← StateRefT'.run' (s := {}) <| modules.flatMapM fun (name, data) =>
+    data.constants.mapM fun info => declaration reachesIO info name
+  return {
+    modules := modules.map fun (name, data) =>
+      { name, usesModuleSystem := data.isModule,
+        imports := data.imports.map fun i => { name := i.module, comptime := i.isMeta } }
+    declarations }
 
 def withEnvironment {α : Type} (modules : Array Name) (action : CoreM α) : IO α := do
   unsafe enableInitializersExecution
@@ -151,13 +194,12 @@ def run (project : Project) (args : List String) : IO Unit := do
   let catalog := args.toArray.map String.toName
   unless catalog.contains config.solution_module do
     throw <| .userError s!"solution_module {config.solution_module} is not built by a default target"
-  let (found, evidence, headlines, headlineErrors) ← withEnvironment catalog <| Meta.MetaM.run' do
-    let found ← catalog.mapM fun name => (collect name : CoreM _)
+  let (inventory, evidence, headlines, headlineErrors) ← withEnvironment catalog <| Meta.MetaM.run' do
+    let inventory ← collect catalog
     let evidence := allEvidence (← getEnv)
     let headlines ← config.theorem_names.mapM headline
     let holes := config.definition_names.getD #[]
-    return (found, evidence, headlines, ← headlineViolations project holes headlines evidence)
-  let inventory : Inventory := { modules := found.map (·.1), declarations := found.flatMap (·.2) }
+    return (inventory, evidence, headlines, ← headlineViolations project holes headlines evidence)
   let errors := violations project inventory ++ headlineErrors ++
     (← challengeImports project config.challenge_module)
   unless project.check inventory && errors.isEmpty do

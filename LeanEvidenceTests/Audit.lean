@@ -29,10 +29,6 @@ private def valid : Array Name := #[`LeanEvidenceTests.Fixtures.Boundary,
   `LeanEvidenceTests.Fixtures.Spec, `LeanEvidenceTests.Fixtures.Core,
   `LeanEvidenceTests.Fixtures.Shell]
 
-private def inventory (catalog : Array Name) : CoreM Inventory := do
-  let found ← catalog.mapM Audit.collect
-  return { modules := found.map (·.1), declarations := found.flatMap (·.2) }
-
 private def contains (text fragment : String) : Bool := (text.splitOn fragment).length > 1
 
 private def expect (errors : Array String) (name reason : String) : CoreM Unit := do
@@ -43,19 +39,20 @@ private def expect (errors : Array String) (name reason : String) : CoreM Unit :
   `A.B.C.D == some .core
 
 run_cmd Elab.Command.liftCoreM do
-  let accepted ← inventory valid
+  let accepted ← Audit.collect valid
   unless project.check accepted do
     throwError "Valid fixtures were rejected:\n{Audit.violations project accepted}"
   let reassign (module : Name) (role : Role) : Project :=
     { layers := project.layers.map fun (name, r) => (name, if name == module then role else r) }
-  let rejected ← inventory (valid.push `LeanEvidenceTests.Fixtures.Rejected)
+  let rejected ← Audit.collect (valid.push `LeanEvidenceTests.Fixtures.Rejected)
   for layout in #[project, reassign `LeanEvidenceTests.Fixtures.Rejected .spec] do
     if layout.check rejected then throwError "Rejected fixtures passed"
     for (name, reason) in #[("hiddenUnsafe", "unsafe"), ("diverging", "partial"),
         ("hiddenEffect", "IO"), ("packagedEffect", "IO"), ("startup", "initializer"),
         ("bound", "@[extern]"), ("Rejected.replaced", "@[implemented_by]"),
         ("traced", "dbg builtin"), ("traceValue", "dbg builtin"), ("Rejected.raw", "axioms"),
-        ("Rejected.hole", "sorryAx"), ("Fixtures.Rejected", "may not import")] do
+        ("chained", "Rejected.raw"), ("Rejected.hole", "sorryAx"),
+        ("Fixtures.Rejected", "may not import")] do
       expect (Audit.violations layout rejected) name reason
   for (module, role, facts, name, reason) in #[
       (`LeanEvidenceTests.Fixtures.Core, Role.boundary, accepted, "identity",

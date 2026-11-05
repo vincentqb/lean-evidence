@@ -33,6 +33,10 @@ def traceValue (n : Nat) : Nat := dbgTraceVal n
 
 axiom raw : False
 
+private theorem viaRaw : False := raw
+
+private theorem chained : 1 = 2 := viaRaw.elim
+
 theorem hole : Identity identity := by sorry
 
 end LeanEvidenceTests.Fixtures.Rejected

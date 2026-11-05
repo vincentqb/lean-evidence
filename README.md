@@ -97,6 +97,9 @@ lake test         # your tests, including the live suites
 lake comparator   # MyApp/Claims.lean proves exactly the statements in Manifest.lean
 ```
 
+The audit reruns and prints its report only when a module, `Audit.lean`, `comparator.json`, or
+`Manifest.lean` changes; `.lake/build/leanEvidence.txt` keeps the last report.
+
 Make the files you own read-only for agents, along with `lakefile.lean` and
 `lake-manifest.json`. `Check` on foreign code needs `precompileModules`. `lake comparator`
 replays the headline proofs through the kernel in a separate process, which rejects proofs
