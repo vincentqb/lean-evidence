@@ -1,23 +1,16 @@
 module
 
-public import Tests.Fixtures.Spec
+public import LeanEvidenceTests.Fixtures.Spec
 public meta import LeanEvidence
 
 public section
 
-namespace Tests.Fixtures
+namespace LeanEvidenceTests.Fixtures
 
 inductive Tree where
   | leaf
   | fork : Tree → Tree → Tree
   deriving Repr
-
-structure Box (α : Type) where
-  value : Option α := none
-
-def size : Tree → Nat
-  | .leaf => 1
-  | .fork l r => size l + size r
 
 def halve (n : Nat) : Nat :=
   if h : n < 2 then 0 else halve (n - 2) + 1
@@ -52,4 +45,4 @@ theorem uses_unnamed (h : 1 = 2) : 1 = 2 := h
 
 Conjecture CoreClaim := 1 = 1
 
-end Tests.Fixtures
+end LeanEvidenceTests.Fixtures

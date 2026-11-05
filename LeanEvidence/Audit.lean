@@ -9,9 +9,6 @@ open Lean
 
 namespace LeanEvidence.Audit
 
-private def owner? (env : Environment) (name : Name) : Option Name :=
-  env.getModuleIdxFor? name |>.bind fun idx => env.allImportedModuleNames[idx.toNat]?
-
 private def terminates (env : Environment) (name : Name) : Bool :=
   (Elab.Structural.eqnInfoExt.find? env name).isSome || (Elab.WF.eqnInfoExt.find? env name).isSome
 
@@ -63,26 +60,11 @@ def collect (name : Name) : CoreM (ModuleFact × Array DeclarationFact) := do
   let imports := data.imports.map fun i => { name := i.module, comptime := i.isMeta }
   return ({ name, usesModuleSystem := data.isModule, imports }, declarations)
 
-def withEnvironment {α : Type} (module : Name) (action : CoreM α) : IO α := do
-  initSearchPath (← findSysroot)
+def withEnvironment {α : Type} (modules : Array Name) (action : CoreM α) : IO α := do
   unsafe enableInitializersExecution
-  let env ← importModules #[{ module, importAll := true }] {} (loadExts := true)
+  let env ← importModules (modules.map ({ module := · })) {} (loadExts := true)
   let (result, _) ← action.toIO { fileName := "<lean-evidence>", fileMap := default } { env }
   return result
-
-def inspect (catalog : Array Name) : IO (Inventory × Array Evidence) := do
-  let mut modules := #[]
-  let mut declarations := #[]
-  let mut evidence : Array Evidence := #[]
-  for name in catalog do
-    let (module, found, entries) ← withEnvironment name do
-      let (module, found) ← collect name
-      return (module, found, allEvidence (← getEnv))
-    modules := modules.push module
-    declarations := declarations ++ found
-    for entry in entries do
-      unless evidence.contains entry do evidence := evidence.push entry
-  return ({ modules, declarations }, evidence)
 
 def violations (project : Project) (inventory : Inventory) : Array String := Id.run do
   let mut errors := #[]
@@ -101,21 +83,11 @@ def violations (project : Project) (inventory : Inventory) : Array String := Id.
   return errors
 
 structure Config where
-  challenge : Name
-  solution : Name
-  theorems : Array Name
-  holes : Array Name
-
-def readConfig (path : System.FilePath) : IO Config := do
-  let json ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
-  let name (field : String) := return (← IO.ofExcept <| json.getObjValAs? String field).toName
-  return {
-    challenge := ← name "challenge_module"
-    solution := ← name "solution_module"
-    theorems := (← IO.ofExcept <| json.getObjValAs? (Array String) "theorem_names").map String.toName
-    holes := ((json.getObjValAs? (Array String) "definition_names").toOption.getD #[]).map
-      String.toName
-  }
+  challenge_module : Name
+  solution_module : Name
+  theorem_names : Array Name
+  definition_names : Option (Array Name)
+  deriving FromJson
 
 structure Headline where
   name : Name
@@ -136,8 +108,8 @@ def headline (name : Name) : MetaM Headline := do
     let mut unnamed := #[]
     for binder in binders do
       let statement ← Meta.inferType binder
-      if let some kind := statement.getAppFn.constName?.bind (claimKind? (← getEnv)) then
-        let claim := statement.getAppFn.constName!
+      let claim := statement.getAppFn.constName
+      if let some kind := claimKind? (← getEnv) claim then
         premises := premises.push { claim, kind, discharged := ← discharged statement }
       else if !statement.hasFVar && (← Meta.isProp statement) then
         unnamed := unnamed.push (toString (← Meta.ppExpr statement))
@@ -145,13 +117,12 @@ def headline (name : Name) : MetaM Headline := do
 
 def headlineViolations (project : Project) (holes : Array Name) (headlines : Array Headline)
     (evidence : Array Evidence) : MetaM (Array String) := do
-  let env ← getEnv
   let mut errors := #[]
-  for (claim, _) in registeredClaims env do
-    if let some role := (owner? env claim).bind project.role? then
+  for (claim, _) in registeredClaims (← getEnv) do
+    if let some role := (← findModuleOf? claim).bind project.role? then
       unless role == .spec do errors := errors.push s!"{claim}: declare claims in a spec module"
   for hole in holes do
-    unless (owner? env hole).bind project.role? matches some .core | some .shell do
+    unless (← findModuleOf? hole).bind project.role? matches some .core | some .shell do
       errors := errors.push s!"{hole}: a definition hole must be a core or shell definition"
   for line in headlines do
     for hypothesis in line.unnamed do
@@ -162,46 +133,33 @@ def headlineViolations (project : Project) (holes : Array Name) (headlines : Arr
           s!"{line.name}: world assumption {premise.claim} has no Test, Check, or live suite"
   return errors
 
-partial def challengeImports (project : Project) (root : Name) : IO (Array String) := do
-  let sources ← getSrcSearchPath
-  let rec visit (pending : List Name) (seen : NameSet) (errors : Array String) :
-      IO (Array String) := do
-    let name :: rest := pending | return errors
-    if seen.contains name then return ← visit rest seen errors
-    let path := (← sources.findWithExt "lean" name).getD
-      ((name.toString.replace "." "/") ++ ".lean")
-    let header ← parseImports' (← IO.FS.readFile path) path.toString
-    let mut errors := errors
-    let mut next := rest
-    for dependency in header.imports do
-      let target := dependency.module
-      if root.isPrefixOf target then
-        next := target :: next
-      else
-        match project.role? target with
-        | some .spec | some .boundary => pure ()
-        | some role =>
-          errors := errors.push s!"{name} imports {target} ({repr role}); \
-            a challenge may import only spec and boundary modules"
-        | none =>
-          unless project.trusts target do
-            errors := errors.push s!"{name} imports untrusted {target}"
-    visit next (seen.insert name) errors
-  visit [root] {} #[]
+def challengeImports (project : Project) (root : Name) : IO (Array String) := do
+  let path := (← (← getSrcSearchPath).findWithExt "lean" root).getD (modToFilePath "." root "lean")
+  let header ← parseImports' (← IO.FS.readFile path) path.toString
+  return header.imports.filterMap fun dependency =>
+    if project.admits .spec { name := dependency.module, comptime := false } then none
+    else some s!"{root} imports {dependency.module}; \
+      a challenge may import only spec and boundary modules and trusted roots"
 
 private def describe (evidence : Array Evidence) (premise : Premise) : String :=
   let count := fun kind => (evidence.filter fun e => e.claim == premise.claim && e.kind == kind).size
   let kind := if premise.kind == .world then "world" else if premise.discharged then "proved" else "open"
   s!"{kind} {premise.claim} [{count .test} tests, {count .check} checks, {count .suite} suites]"
 
-def run (project : Project) (catalog : Array Name) : IO Unit := do
-  let config ← readConfig "comparator.json"
-  let (inventory, evidence) ← inspect catalog
-  let (headlines, headlineErrors) ← withEnvironment config.solution <| Meta.MetaM.run' do
-    let headlines ← config.theorems.mapM headline
-    return (headlines, ← headlineViolations project config.holes headlines evidence)
+def run (project : Project) (args : List String) : IO Unit := do
+  let config : Config ← IO.ofExcept <| Json.parse (← IO.FS.readFile "comparator.json") >>= fromJson?
+  let catalog := args.toArray.map String.toName
+  unless catalog.contains config.solution_module do
+    throw <| .userError s!"solution_module {config.solution_module} is not built by a default target"
+  let (found, evidence, headlines, headlineErrors) ← withEnvironment catalog <| Meta.MetaM.run' do
+    let found ← catalog.mapM fun name => (collect name : CoreM _)
+    let evidence := allEvidence (← getEnv)
+    let headlines ← config.theorem_names.mapM headline
+    let holes := config.definition_names.getD #[]
+    return (found, evidence, headlines, ← headlineViolations project holes headlines evidence)
+  let inventory : Inventory := { modules := found.map (·.1), declarations := found.flatMap (·.2) }
   let errors := violations project inventory ++ headlineErrors ++
-    (← challengeImports project config.challenge)
+    (← challengeImports project config.challenge_module)
   unless project.check inventory && errors.isEmpty do
     throw <| IO.userError ("LeanEvidence audit failed:\n" ++ "\n".intercalate errors.toList)
   IO.println s!"Checked {inventory.modules.size} modules and {inventory.declarations.size} declarations"

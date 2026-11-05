@@ -10,7 +10,7 @@ namespace LeanEvidence
 
 inductive Role where
   | spec | boundary | core | shell | tooling
-  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Repr
+  deriving DecidableEq, Repr
 
 @[expose] def Role.Inner (role : Role) : Prop :=
   role = .spec ∨ role = .boundary ∨ role = .core
@@ -20,10 +20,7 @@ structure Project where
   trusted : Array Name := #[`Init, `Std, `Lean]
 
 @[expose] def Project.role? (project : Project) (name : Name) : Option Role :=
-  (project.layers.foldl (init := none) fun best (layer, role) =>
-    if layer.isPrefixOf name && best.all (·.1.getNumParts < layer.getNumParts) then
-      some (layer, role)
-    else best).map (·.2)
+  ((project.layers.filter (·.1.isPrefixOf name)).getMax? (·.1.getNumParts < ·.1.getNumParts)).map (·.2)
 
 @[expose] def Project.Trusted (project : Project) (name : Name) : Prop :=
   ∃ root ∈ project.trusted, root.isPrefixOf name = true
@@ -58,18 +55,18 @@ structure Inventory where
   ∃ fact ∈ inventory.modules, fact.name = source ∧
     ∃ dependency ∈ fact.imports, dependency.name = target ∧ dependency.comptime = false
 
-@[expose] def standardAxioms : Array Name := #[``propext, ``Classical.choice, ``Quot.sound]
+def standardAxioms : Array Name := #[``propext, ``Classical.choice, ``Quot.sound]
 
 inductive ClaimKind where
   | world | conjecture
-  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Repr
+  deriving BEq
 
 structure Premise where
   claim : Name
   kind : ClaimKind
   discharged : Bool
 
-@[expose] def proved (premises : Array Premise) : Bool :=
+def proved (premises : Array Premise) : Bool :=
   premises.all fun premise => premise.kind == .world || premise.discharged
 
 @[expose] def Role.permits : Role → Role → Bool
@@ -111,8 +108,7 @@ structure Premise where
 
 private theorem permits_inner {source target : Role} (permitted : source.permits target = true)
     (inner : source.Inner) : target.Inner := by
-  unfold Role.Inner at *
-  rcases inner with rfl | rfl | rfl <;> cases target <;> simp_all [Role.permits]
+  cases source <;> cases target <;> simp_all [Role.Inner, Role.permits]
 
 private theorem import_step {project : Project} {inventory : Inventory}
     (accepted : project.check inventory = true) {source target : Name}
@@ -120,24 +116,18 @@ private theorem import_step {project : Project} {inventory : Inventory}
     (edge : inventory.RuntimeImport source target) :
     (∀ reached, project.role? target = some reached → reached.Inner) ∧
       (project.role? target = none → project.Trusted target) := by
-  obtain ⟨fact, member, named, dependency, imported, target_eq, runtime⟩ := edge
+  obtain ⟨fact, member, rfl, dependency, imported, rfl, runtime⟩ := edge
   simp only [Project.check, Bool.and_eq_true, Array.all_eq_true'] at accepted
   have admitted := accepted.1 fact member
   unfold Project.moduleAdmitted at admitted
-  rw [named] at admitted
-  cases owner : project.role? source with
+  cases owner : project.role? fact.name with
   | none => simp [owner] at admitted
   | some role =>
     simp only [owner, Bool.and_eq_true, Array.all_eq_true'] at admitted
     have permitted := admitted.2 dependency imported
-    simp only [Project.admits, runtime, target_eq, Bool.false_or] at permitted
-    constructor
-    · intro reached found
-      simp only [found] at permitted
-      exact permits_inner permitted (inner role owner)
-    · intro found
-      simp only [found, Project.trusts] at permitted
-      exact Array.any_eq_true'.mp permitted
+    simp only [Project.admits, runtime, Bool.false_or] at permitted
+    exact ⟨fun _ found => permits_inner (by simpa [found] using permitted) (inner role owner),
+      fun found => Array.any_eq_true'.mp (by simpa [found, Project.trusts] using permitted)⟩
 
 /-- Once the audit accepts, no chain of runtime imports leads from spec, boundary, or
 core code to the shell or to tooling. -/
@@ -148,11 +138,7 @@ theorem layering_sound (project : Project) (inventory : Inventory)
     (∀ reached, project.role? target = some reached → reached.Inner) ∧
       (project.role? target = none → project.Trusted target) := by
   induction reaches with
-  | single edge =>
-    refine import_step accepted (fun found owner => ?_) edge
-    rw [classified] at owner
-    cases owner
-    exact inner
+  | single edge => exact import_step accepted (fun _ owner => by simp_all) edge
   | tail _ edge previous => exact import_step accepted previous.1 edge
 
 end LeanEvidence

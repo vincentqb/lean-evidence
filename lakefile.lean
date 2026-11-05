@@ -12,18 +12,18 @@ package «lean_evidence» where
 
 @[default_target]
 lean_lib «LeanEvidence» where
-  globs := #[.one `LeanEvidence, .submodules `LeanEvidence]
+  globs := #[.andSubmodules `LeanEvidence]
 
 @[default_target]
 lean_lib «Examples» where
   roots := #[`Examples.ConstantFolding.Claims]
-  globs := #[.submodules `Examples]
+  globs := #[.submodules `Examples.ConstantFolding]
   precompileModules := true
 
 lean_lib «LeanEvidenceManifest»
 
 @[test_driver]
-lean_lib «Tests» where
+lean_lib «LeanEvidenceTests» where
   precompileModules := true
   leanOptions := #[⟨`linter.extra.unreachableTactic, false⟩]
 
@@ -31,27 +31,18 @@ package_facet leanEvidence pkg : Unit := do
   let some audit ← findModule? `LeanEvidence.Audit | error "LeanEvidence.Audit is unavailable"
   let mut catalog : Array Name := #[]
   let mut job := Job.nil.mix (← audit.leanArts.fetch)
-  for lib in pkg.leanLibs do
-    unless pkg.defaultTargets.contains lib.name do continue
-    for mod in ← (← lib.modules.fetch).await do
-      unless catalog.contains mod.name do
-        catalog := catalog.push mod.name
-        job := job.mix (← mod.leanArts.fetch)
-  for exe in pkg.leanExes do
-    unless pkg.defaultTargets.contains exe.name do continue
-    for mod in (← (← exe.root.transImports.fetch).await).push exe.root do
+  for root in ← (← pkg.defaultModules.fetch).await do
+    for mod in (← (← root.transImports.fetch).await).push root do
       unless mod.pkg.keyName != pkg.keyName || catalog.contains mod.name do
         catalog := catalog.push mod.name
         job := job.mix (← mod.leanArts.fetch)
-  let lean ← getLean
-  let env := (← getWorkspace).augmentedEnvVars
-  job.mapM fun _ => proc {
-    cmd := lean.toString
+  job.mapM fun _ => do proc {
+    cmd := (← getLean).toString
     args := #["--run", (pkg.dir / "Scripts" / "Audit.lean").toString] ++ catalog.map Name.toString
     cwd := some pkg.dir
-    env
+    env := ← getAugmentedEnv
   }
 
 @[default_target]
 target audit pkg : Unit := do
-  return (← pkg.toPackage.fetchFacetJob `leanEvidence).map (fun _ => ())
+  return (← pkg.fetchFacetJob `leanEvidence).map (fun _ => ())

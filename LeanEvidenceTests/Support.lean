@@ -7,7 +7,7 @@ meta section
 
 open Lean Elab Command LeanEvidence
 
-namespace Tests
+namespace LeanEvidenceTests
 
 elab "rejects " reason:str " in " cmd:command : command => do
   let saved ← get
@@ -34,4 +34,4 @@ elab "assert_evidence " n:ident " = " tests:num " tests " checks:num " checks " 
       count .suite == suites.getNat do
     throwError "{name}: {count .test} tests, {count .check} checks, {count .suite} suites"
 
-end Tests
+end LeanEvidenceTests

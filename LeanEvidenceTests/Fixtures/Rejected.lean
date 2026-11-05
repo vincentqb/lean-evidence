@@ -1,10 +1,10 @@
 module
 
-public import Tests.Fixtures.Shell
+public import LeanEvidenceTests.Fixtures.Shell
 
 public section
 
-namespace Tests.Fixtures.Rejected
+namespace LeanEvidenceTests.Fixtures.Rejected
 
 private unsafe def hiddenUnsafe (n : Nat) : Nat := n + 1
 
@@ -31,10 +31,8 @@ def traced (n : Nat) : Nat := dbgTrace "side effect" fun _ => n
 
 def traceValue (n : Nat) : Nat := dbgTraceVal n
 
-def viaShell : IO Unit := Tests.Fixtures.report 0
-
 axiom raw : False
 
-theorem hole : False := by sorry
+theorem hole : Identity identity := by sorry
 
-end Tests.Fixtures.Rejected
+end LeanEvidenceTests.Fixtures.Rejected
