@@ -32,6 +32,28 @@ structure Entry where
   source : Option Source
   deriving Repr
 
+structure Claim where
+  fact : ClaimFact
+  statement : String
+  source : Option Source
+  deriving Repr
+
+structure Snapshot where
+  inventories : Array Name
+  evidence : Array Entry
+  claims : Array Claim
+  deriving Repr
+
+def Snapshot.facts (snapshot : Snapshot) : Array ClaimFact :=
+  snapshot.claims.map (·.fact)
+
+def Snapshot.isComplete (snapshot : Snapshot) : Bool :=
+  Claims.isComplete snapshot.inventories snapshot.facts
+
+def Snapshot.theoremIndex (snapshot : Snapshot) : Array Name :=
+  snapshot.claims.filterMap fun claim =>
+    if claim.fact.kind == .proof && claim.fact.isComplete then claim.fact.evidence else none
+
 def entryNames (env : Environment) (scope : Name) : Array Name :=
   ((evidenceExt.getState env).toArray.map Prod.fst).filter (scope.isPrefixOf ·)
     |>.qsort (fun a b => a.toString < b.toString)
@@ -57,6 +79,8 @@ def buildEntry (n : Name) : CoreM Entry := do
     | throwError "{n} has no registered evidence"
   let info ← getConstInfo n
   if evidence.kind.requiresProof then requireProof n
+  if evidence.kind == .tested || evidence.kind == .failing then
+    Meta.MetaM.run' <| validateTests n
   let axioms := (← collectAxioms n).qsort (fun a b => a.toString < b.toString)
   let typePP := (← Meta.MetaM.run' <| PrettyPrinter.ppExpr info.type).pretty
   let proposition := if evidence.kind == .world then info.value?
@@ -76,6 +100,25 @@ def buildEntry (n : Name) : CoreM Entry := do
 
 def collectEntries (scope : Name) : CoreM (Array Entry) := do
   (entryNames (← getEnv) scope).mapM buildEntry
+
+def collectClaims (inventories : Array Name) : CoreM (Array Claim) := do
+  modifyEnv (·.setExporting false)
+  let mut result := #[]
+  for name in inventories do
+    let facts ← Meta.MetaM.run' <| validateRequirements name
+    let some claims := getRequirements? (← getEnv) name
+      | throwError "{name}: required inventory is unavailable"
+    for (claim, fact) in claims.zip facts do
+      let proposition ← Meta.MetaM.run' <| requiredStatement claim
+      let statement := (← Meta.MetaM.run' <| PrettyPrinter.ppExpr proposition).pretty
+      result := result.push { fact, statement, source := ← sourceLocation claim.name }
+  return result
+
+def collect (inventories : Array Name) : CoreM Snapshot := do
+  let claims ← collectClaims inventories
+  let names := claims.filterMap (·.fact.evidence) |>.foldl (fun names name =>
+    if names.contains name then names else names.push name) #[]
+  return { inventories, claims, evidence := ← names.mapM buildEntry }
 
 private def namesToJson (names : Array Name) : Json :=
   Json.arr (names.map (Json.str ∘ Name.toString))
@@ -105,6 +148,27 @@ def entryToJson (e : Entry) : Json :=
     ("source", e.source.map sourceToJson |>.getD Json.null)
   ]
 
+def claimToJson (claim : Claim) : Json :=
+  Json.mkObj [
+    ("inventory", Json.str claim.fact.inventory.toString),
+    ("name", Json.str claim.fact.name.toString),
+    ("kind", Json.str (if claim.fact.kind == .proof then "proof" else "test")),
+    ("statement", Json.str claim.statement),
+    ("evidence", claim.fact.evidence.map (Json.str ∘ Name.toString) |>.getD Json.null),
+    ("complete", toJson claim.fact.isComplete),
+    ("source", claim.source.map sourceToJson |>.getD Json.null)
+  ]
+
+def Snapshot.toJson (snapshot : Snapshot) : Json :=
+  Json.mkObj [
+    ("inventories", namesToJson snapshot.inventories),
+    ("claims", Json.arr (snapshot.claims.map claimToJson)),
+    ("evidence", Json.arr (snapshot.evidence.map entryToJson)),
+    ("theorem_index", namesToJson snapshot.theoremIndex),
+    ("outstanding", namesToJson (Claims.outstanding snapshot.facts)),
+    ("complete", Lean.toJson snapshot.isComplete)
+  ]
+
 def withEnvironment {α : Type} (imports : Array Import) (action : CoreM α) : IO α := do
   if imports.isEmpty then throw <| IO.userError "Supply at least one compiled module to report on"
   initSearchPath (← findSysroot)
@@ -117,10 +181,12 @@ def withEnvironment {α : Type} (imports : Array Import) (action : CoreM α) : I
     { fileName := "<evidence-report>", fileMap := default } { env }
   return result
 
-def run (scope : Name) (outPath : System.FilePath) (imports : Array Import) : IO Unit := do
-  let entries ← withEnvironment imports (collectEntries scope)
-  IO.FS.writeFile outPath (Json.arr (entries.map entryToJson)).pretty
-  IO.println s!"Wrote {entries.size} evidence entries to {outPath}"
+def run (inventories : Array Name) (outPath : System.FilePath) (imports : Array Import) :
+    IO Unit := do
+  let snapshot ← withEnvironment imports (collect inventories)
+  IO.FS.writeFile outPath snapshot.toJson.pretty
+  IO.println s!"Wrote {snapshot.claims.size} required claims to {outPath}; \
+    complete: {snapshot.isComplete}"
 
 end LeanEvidence.Report
 
@@ -180,5 +246,74 @@ ProvenTheorem report_no_tests : ∀ e : Report.Entry,
   apply object_field
   · simp [List.pairwise_cons]
   · simp [tests]
+
+ProvenTheorem report_completion : ∀ snapshot : Report.Snapshot,
+    snapshot.toJson.getObjVal? "complete" =
+      .ok (toJson (Claims.isComplete snapshot.inventories snapshot.facts)) ∧
+    snapshot.toJson.getObjVal? "outstanding" =
+      .ok (.arr ((Claims.outstanding snapshot.facts).map (Json.str ∘ Name.toString))) ∧
+    snapshot.toJson.getObjVal? "theorem_index" =
+      .ok (.arr (snapshot.theoremIndex.map (Json.str ∘ Name.toString))) := by
+  intro snapshot
+  refine ⟨?_, ?_, ?_⟩
+  all_goals
+    unfold Report.Snapshot.toJson
+    apply object_field
+    · simp [List.pairwise_cons]
+    · simp [Report.namesToJson, Report.Snapshot.isComplete]
+
+ProvenTheorem report_claims : ∀ claim : Report.Claim,
+    (Report.claimToJson claim).getObjVal? "statement" = .ok (.str claim.statement) ∧
+    (Report.claimToJson claim).getObjVal? "evidence" =
+      .ok (claim.fact.evidence.map (Json.str ∘ Name.toString) |>.getD .null) ∧
+    (Report.claimToJson claim).getObjVal? "complete" = .ok (toJson claim.fact.isComplete) := by
+  intro claim
+  refine ⟨?_, ?_, ?_⟩
+  all_goals
+    unfold Report.claimToJson
+    apply object_field
+    · simp [List.pairwise_cons]
+    · simp
+
+ProvenTheorem theorem_index_iff : ∀ (snapshot : Report.Snapshot) name,
+    name ∈ snapshot.theoremIndex ↔ ∃ claim ∈ snapshot.claims,
+      claim.fact.kind = .proof ∧ claim.fact.isComplete = true ∧
+        claim.fact.evidence = some name := by
+  intro snapshot name
+  simp [Report.Snapshot.theoremIndex, Array.mem_filterMap]
+  grind
+
+Requirements reportObligations where
+  proof evidence : ∀ e : Report.Entry,
+    (Report.entryToJson e).getObjVal? "evidence" = .ok (.str (toString e.evidence.kind)) ∧
+    (Report.entryToJson e).getObjVal? "assumptions" =
+      .ok (.arr (e.evidence.assumptions.map (Json.str ∘ Name.toString))) ∧
+    (Report.entryToJson e).getObjVal? "own_hole" = .ok (toJson e.evidence.ownHole) ∧
+    (Report.entryToJson e).getObjVal? "axioms" =
+      .ok (.arr (e.axioms.map (Json.str ∘ Name.toString))) := report_evidence
+  proof tests : ∀ (e : Report.Entry) (r : TestResults), e.tests = some r →
+    ((Report.entryToJson e).getObjVal? "tests").bind (·.getObjVal? "passed") =
+      .ok (toJson r.passed) ∧
+    ((Report.entryToJson e).getObjVal? "tests").bind (·.getObjVal? "total") =
+      .ok (toJson r.total) := report_tests
+  proof no_tests : ∀ e : Report.Entry,
+    e.tests = none → (Report.entryToJson e).getObjVal? "tests" = .ok .null := report_no_tests
+  proof completion : ∀ snapshot : Report.Snapshot,
+    snapshot.toJson.getObjVal? "complete" =
+      .ok (toJson (Claims.isComplete snapshot.inventories snapshot.facts)) ∧
+    snapshot.toJson.getObjVal? "outstanding" =
+      .ok (.arr ((Claims.outstanding snapshot.facts).map (Json.str ∘ Name.toString))) ∧
+    snapshot.toJson.getObjVal? "theorem_index" =
+      .ok (.arr (snapshot.theoremIndex.map (Json.str ∘ Name.toString))) := report_completion
+  proof claims : ∀ claim : Report.Claim,
+    (Report.claimToJson claim).getObjVal? "statement" = .ok (.str claim.statement) ∧
+    (Report.claimToJson claim).getObjVal? "evidence" =
+      .ok (claim.fact.evidence.map (Json.str ∘ Name.toString) |>.getD .null) ∧
+    (Report.claimToJson claim).getObjVal? "complete" = .ok (toJson claim.fact.isComplete) :=
+    report_claims
+  proof theorem_index : ∀ (snapshot : Report.Snapshot) name,
+    name ∈ snapshot.theoremIndex ↔ ∃ claim ∈ snapshot.claims,
+      claim.fact.kind = .proof ∧ claim.fact.isComplete = true ∧
+        claim.fact.evidence = some name := theorem_index_iff
 
 end LeanEvidence.Contracts

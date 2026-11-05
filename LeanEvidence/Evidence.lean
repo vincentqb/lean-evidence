@@ -55,6 +55,48 @@ structure TestResults where
   if r.total == 0 then none
   else some (if r.passed == r.total then .tested else .failing)
 
+structure Requirement (statement : Prop) where
+  witness : Option (PLift statement) := none
+
+@[expose] def Requirement.isComplete {statement : Prop} (r : Requirement statement) : Bool :=
+  r.witness.isSome
+
+inductive RequirementKind where
+  | proof | test
+  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Inhabited, Repr
+
+structure ClaimFact where
+  inventory : Name
+  name : Name
+  kind : RequirementKind
+  evidence : Option Name := none
+  verified : Bool := false
+  deriving Inhabited, Repr
+
+@[expose] def ClaimFact.isComplete (claim : ClaimFact) : Bool :=
+  claim.verified && claim.evidence.isSome
+
+namespace Claims
+
+@[expose] def isComplete (inventories : Array Name) (claims : Array ClaimFact) : Bool :=
+  !inventories.isEmpty &&
+    decide inventories.toList.Nodup &&
+    decide (claims.toList.map (·.name)).Nodup &&
+    inventories.all (fun name => claims.any (·.inventory == name)) &&
+    claims.all (fun claim => inventories.contains claim.inventory && claim.isComplete)
+
+def Complete (inventories : Array Name) (claims : Array ClaimFact) : Prop :=
+  inventories ≠ #[] ∧ inventories.toList.Nodup ∧
+    (claims.toList.map (·.name)).Nodup ∧
+    (∀ name ∈ inventories, ∃ claim ∈ claims, claim.inventory = name) ∧
+    (∀ claim ∈ claims, claim.inventory ∈ inventories ∧ claim.verified = true ∧
+      ∃ evidence, claim.evidence = some evidence)
+
+@[expose] def outstanding (claims : Array ClaimFact) : Array Name :=
+  (claims.filter (! ·.isComplete)).map (·.name)
+
+end Claims
+
 @[expose] def standardAxioms : Array Name := #[``propext, ``Classical.choice, ``Quot.sound]
 
 @[expose] def nonstandardAxioms (axioms : Array Name) : Array Name :=

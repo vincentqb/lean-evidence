@@ -16,6 +16,9 @@ inductive Tree where
   | leaf
   | fork : Tree → Tree → Tree
 
+structure Box (α : Type) where
+  value : Option α := none
+
 def successor (n : Nat) : Nat := n + 1
 
 def sumTo : Nat → Nat
@@ -29,5 +32,9 @@ ProvenTheorem successor_increases : Contract successor (fun f => ∀ n, n < f n)
 ProvenTheorem sumTo_bounds : Contract sumTo (fun f => ∀ n, n ≤ f n) := by
   intro n
   cases n <;> simp [sumTo] <;> omega
+
+Requirements obligations where
+  proof successor : Contract successor (fun f => ∀ n, n < f n) := successor_increases
+  proof sum : Contract sumTo (fun f => ∀ n, n ≤ f n) := sumTo_bounds
 
 end Tests.Fixtures.Core

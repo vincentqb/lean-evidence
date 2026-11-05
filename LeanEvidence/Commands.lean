@@ -25,23 +25,51 @@ initialize evidenceExt : SimplePersistentEnvExtension (Name × Evidence)
 def getEvidence? (env : Environment) (n : Name) : Option Evidence :=
   (evidenceExt.getState env)[n]?
 
-initialize testResultsExt : SimplePersistentEnvExtension (Name × TestResults)
-    (Std.HashMap Name TestResults) ←
+structure TestCase where
+  statement : Name
+  receipt : Name
+  witness : Option Name
+  deriving Inhabited, Repr
+
+initialize testCasesExt : SimplePersistentEnvExtension (Name × TestCase)
+    (Std.HashMap Name (Array TestCase)) ←
   registerSimplePersistentEnvExtension {
-    addEntryFn := fun m (n, r) =>
-      let p := (m[n]?).getD {}
-      m.insert n (p.merge r)
+    addEntryFn := fun m (n, test) =>
+      m.insert n ((m[n]?).getD #[] |>.push test)
     addImportedFn := fun entries => Id.run do
-      let mut m : Std.HashMap Name TestResults := {}
+      let mut m : Std.HashMap Name (Array TestCase) := {}
       for a in entries do
-        for (n, r) in a do
-          let p := (m[n]?).getD {}
-          m := m.insert n (p.merge r)
+        for (n, test) in a do
+          m := m.insert n ((m[n]?).getD #[] |>.push test)
       return m
   }
 
+def getTestCases (env : Environment) (n : Name) : Array TestCase :=
+  (testCasesExt.getState env)[n]?.getD #[]
+
 def getTestResults (env : Environment) (n : Name) : Option TestResults :=
-  (testResultsExt.getState env)[n]?
+  (testCasesExt.getState env)[n]?.map fun tests =>
+    tests.foldl (fun r test => r.merge (TestResults.ofResult test.witness.isSome)) {}
+
+structure RequiredClaim where
+  name : Name
+  kind : RequirementKind
+  evidence : Option Name
+  deriving Inhabited, Repr
+
+initialize requirementsExt : SimplePersistentEnvExtension (Name × Array RequiredClaim)
+    (Std.HashMap Name (Array RequiredClaim)) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun m (name, claims) => m.insert name claims
+    addImportedFn := fun entries => Id.run do
+      let mut m := {}
+      for a in entries do
+        for (name, claims) in a do m := m.insert name claims
+      return m
+  }
+
+def getRequirements? (env : Environment) (name : Name) : Option (Array RequiredClaim) :=
+  (requirementsExt.getState env)[name]?
 
 def unexpectedAxioms (n : Name) : CoreM (Array Name) := do
   return nonstandardAxioms (← collectAxioms n)
@@ -176,29 +204,140 @@ private def registerContract (proof : Name) : CommandElabM Unit := do
     | throwError "{proof}: Contract must name the implementation directly"
   modifyEnv fun env => contractExt.addEntry env (implementation, proof)
 
+def requiredStatement (claim : RequiredClaim) : MetaM Expr := do
+  let info ← getConstInfo claim.name
+  unless info.type.getAppFn.constName? == some ``Requirement do
+    throwError "{claim.name}: expected a closed Requirement"
+  let some statement := info.type.getAppArgs[0]?
+    | throwError "{claim.name}: missing required proposition"
+  unless ← Meta.isProp statement do
+    throwError "{claim.name}: requirement must state a proposition"
+  return statement
+
+def validateRequirement (inventory : Name) (claim : RequiredClaim) : MetaM ClaimFact := do
+  let statement ← requiredStatement claim
+  let value ← Meta.mkAppM ``Requirement.witness #[← Meta.mkConstWithFreshMVarLevels claim.name]
+  let expected ← match claim.evidence with
+    | none =>
+      let type ← Meta.inferType value
+      Meta.mkAppOptM ``Option.none #[some type.getAppArgs[0]!]
+    | some evidence =>
+      let some registered := getEvidence? (← getEnv) evidence
+        | throwError "{claim.name}: {evidence} has no registered evidence"
+      let permitted : Bool := match claim.kind with
+        | .proof => registered.kind == .proven ||
+          (registered.kind == .derived && registered.isComplete)
+        | .test => registered.kind == .unitTest
+      unless permitted do
+        throwError "{claim.name}: {evidence} has the wrong evidence kind for this requirement"
+      requireProof evidence
+      let proof ← Meta.mkConstWithFreshMVarLevels evidence
+      unless ← Meta.isDefEq (← Meta.inferType proof) statement do
+        throwError "{claim.name}: {evidence} does not prove the required proposition"
+      Meta.mkAppM ``Option.some #[← Meta.mkAppM ``PLift.up #[proof]]
+  requireProof claim.name
+  unless ← Meta.isDefEq value expected do
+    throwError "{claim.name}: compiled requirement disagrees with its registered evidence"
+  return {
+    inventory
+    name := claim.name
+    kind := claim.kind
+    evidence := claim.evidence
+    verified := claim.evidence.isSome
+  }
+
+def validateRequirements (inventory : Name) : MetaM (Array ClaimFact) := do
+  let some claims := getRequirements? (← getEnv) inventory
+    | throwError "{inventory}: required inventory is unavailable"
+  let info ← getConstInfo inventory
+  let some body := info.value?
+    | throwError "{inventory}: compiled inventory body is unavailable; use import all"
+  requireProof inventory
+  unless ← Meta.isDefEq body (toExpr (claims.map (·.name))) do
+    throwError "{inventory}: compiled inventory disagrees with its registered claims"
+  claims.mapM (validateRequirement inventory)
+
+declare_syntax_cat requirementEntry
+syntax withPosition(ident ident " : " term (" := " ident)?) : requirementEntry
+
+elab "Requirements " n:ident " where" entries:requirementEntry* : command => do
+  let inventory ← fullName n
+  if (← getEnv).contains inventory then throwError "{inventory} already exists"
+  let mut claims := #[]
+  for entry in entries do
+    let (label, statement, evidence, kind) ← match entry with
+      | `(requirementEntry| $kind:ident $label:ident : $statement:term $[:= $evidence:ident]?) => do
+        let kind ← match kind.getId with
+          | `proof => pure RequirementKind.proof
+          | `test => pure RequirementKind.test
+          | _ => throwError "A requirement must be a proof or test"
+        pure (label, statement, evidence, kind)
+      | _ => throwUnsupportedSyntax
+    let name := inventory ++ label.getId
+    let declaration := mkIdent (rootNamespace ++ name)
+    if claims.any (fun claim => claim.name == name) then
+      throwError "{inventory}: duplicate required claim {label}"
+    let evidence ← evidence.mapM resolveGlobalConstNoOverload
+    if let some witness := evidence then
+      let witness := mkIdent witness
+      checkedCommand (← `(public meta def $declaration : Requirement $statement :=
+        { witness := some ⟨$witness⟩ }))
+    else
+      checkedCommand (← `(public meta def $declaration : Requirement $statement := {}))
+    let claim : RequiredClaim := { name, kind, evidence }
+    discard <| liftTermElabM <| validateRequirement inventory claim
+    claims := claims.push claim
+  if claims.isEmpty then throwError "{inventory}: at least one required claim is required"
+  let names : Array (TSyntax `term) := claims.map (fun claim => quote claim.name)
+  checkedCommand (← `(public meta def $n : Array Lean.Name := #[$[$names],*]))
+  modifyEnv fun env => requirementsExt.addEntry env (inventory, claims)
+
+def validateTests (name : Name) : MetaM Unit := do
+  let claim ← getConstInfo name
+  for test in getTestCases (← getEnv) name do
+    let statement ← Meta.mkConstWithFreshMVarLevels test.statement
+    unless ← Meta.isDefEq (← Meta.inferType statement) (mkSort .zero) do
+      throwError "{test.statement}: test must state a proposition"
+    requireProof test.statement
+    let receipt ← Meta.mkConstWithFreshMVarLevels test.receipt
+    unless ← Meta.isDefEq receipt (toExpr test.witness.isSome) do
+      throwError "{test.receipt}: test receipt disagrees with its proof"
+    if let some witness := test.witness then
+      requireProof witness
+      unless ← Meta.isDefEq (← getConstInfo witness).type statement do
+        throwError "{witness}: test proof has the wrong proposition"
+    let bridgeName := test.statement.appendAfter "_from_claim"
+    let bridge ← getConstInfo bridgeName
+    requireProof bridgeName
+    unless ← Meta.isDefEq bridge.type (← mkArrow claim.type statement) do
+      throwError "{test.statement}: test is not an instance of {name}"
+
 elab "Test " n:ident " : " t:term " := " body:term : command => do
   let name ← fullName n
   if (getEvidence? (← getEnv) name).isSome then
     throwError "{name}: use Test before declaring evidence"
   let results := (getTestResults (← getEnv) name).getD {}
+  let statement := mkIdent (n.getId.appendAfter s!"_case_{results.total + 1}")
+  checkedCommand (← `(public def $statement : Prop := $t))
   let witness := mkIdent (n.getId.appendAfter s!"_test_{results.total + 1}")
   let saved ← get
-  let mut passed := false
+  let mut proof := none
   try
     checkedCommand (← `(public theorem $witness : $t := $body))
     let w ← resolveGlobalConstNoOverload witness
-    requireProp w
     liftCoreM <| requireProof w
-    passed := true
+    proof := some w
   catch _ =>
     set saved
   let receipt := mkIdent (n.getId.appendAfter s!"_result_{results.total + 1}")
-  if passed then
-    checkedCommand (← `(public def $receipt : Bool := true))
+  if proof.isSome then
+    checkedCommand (← `(public meta def $receipt : Bool := true))
   else
-    checkedCommand (← `(public def $receipt : Bool := false))
+    checkedCommand (← `(public meta def $receipt : Bool := false))
     logWarning m!"Test {name} [{results.total + 1}]: failed"
-  modifyEnv fun env => testResultsExt.addEntry env (name, TestResults.ofResult passed)
+  let statement ← resolveGlobalConstNoOverload statement
+  let receipt ← resolveGlobalConstNoOverload receipt
+  modifyEnv fun env => testCasesExt.addEntry env (name, { statement, receipt, witness := proof })
 
 elab doc?:(docComment)? "ProvenTheorem " n:ident " : " t:term " := " proof:term :
     command => do
@@ -229,14 +368,29 @@ private def testCounts (n : TSyntax `ident) : CommandElabM TestResults := do
   if results.verdict.isNone then throwError "{name}: at least one test is required"
   return results
 
+private def bindTests (n : TSyntax `ident) (t : TSyntax `term) : CommandElabM Unit := do
+  let name ← fullName n
+  for test in getTestCases (← getEnv) name do
+    let statement := mkIdent test.statement
+    let bridge := mkIdent (rootNamespace ++ test.statement.appendAfter "_from_claim")
+    try
+      checkedCommand (← `(public theorem $bridge : $t → $statement := by
+        intro claim
+        first | exact claim | apply claim))
+    catch _ =>
+      throwError "{test.statement}: test is not an instance of {name}"
+    liftCoreM <| requireProof (← resolveGlobalConstNoOverload bridge)
+
 elab doc?:(docComment)? "TestedConjecture " n:ident " : " t:term : command => do
   let r ← testCounts n
   if r.verdict != some .tested then throwError "{n}: {r.passed}/{r.total} tests passed"
+  bindTests n t
   conjecture doc? n t .tested
 
 elab doc?:(docComment)? "FailingConjecture " n:ident " : " t:term : command => do
   let r ← testCounts n
   if r.verdict != some .failing then throwError "{n}: no failing test was recorded"
+  bindTests n t
   conjecture doc? n t .failing
 
 elab doc?:(docComment)? "DerivedConjecture " n:ident " : " t:term " := " proof:term :
@@ -251,7 +405,7 @@ elab doc?:(docComment)? "DerivedConjecture " n:ident " : " t:term " := " proof:t
 
 elab doc?:(docComment)? "Sketch " n:ident : command => do
   unless doc?.isSome do throwError "Sketch {n} requires a doc comment describing the future claim"
-  checkedCommand (← `(public def $n : Unit := ()))
+  checkedCommand (← `(public meta def $n : Unit := ()))
   let name ← fullName n
   mark name .sketch
   attachDoc doc? name

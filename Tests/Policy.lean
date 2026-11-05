@@ -26,6 +26,7 @@ private def project : Project := {
     ⟨`Tests.Fixtures.Adapter, .adapter⟩
   ]
   trusted := #[`Init, `Std, `Lean, `LeanEvidence]
+  requirements := #[`Tests.Fixtures.Core.obligations]
 }
 
 rejects "is false" in
@@ -43,9 +44,33 @@ private def expectViolation (errors : Array String) (name reason : String) : Cor
 run_cmd Lean.Elab.Command.liftCoreM do
   let catalog := project.modules.map (·.name)
   let accepted ← Audit.check project catalog
+  unless project.isComplete catalog accepted && accepted.claims.size == 2 &&
+      (Claims.outstanding accepted.claims).isEmpty do
+    throwError "The compiled required claims did not complete the project"
+  let first := accepted.claims[0]!
+  let missingEvidence := { accepted with
+    claims := accepted.claims.set! 0 { first with evidence := none } }
+  let unverified := { accepted with
+    claims := accepted.claims.set! 0 { first with verified := false } }
+  let unexpected := { accepted with
+    claims := accepted.claims.set! 0 { first with inventory := `Unused } }
+  unless !({ project with requirements := #[] }.isComplete catalog accepted) &&
+      !({ project with requirements := project.requirements.push `Unused }.isComplete catalog accepted) &&
+      !({ project with requirements := project.requirements ++ project.requirements }.isComplete catalog accepted) &&
+      !(project.isComplete catalog { accepted with claims := #[] }) &&
+      !(project.isComplete catalog { accepted with claims := accepted.claims.push first }) &&
+      !(project.isComplete catalog missingEvidence) &&
+      !(project.isComplete catalog unverified) &&
+      !(project.isComplete catalog unexpected) do
+    throwError "Missing, duplicate, unverified, or unexpected required claims passed"
+  expectViolation (Audit.violations project catalog missingEvidence)
+    first.name.toString "Outstanding"
   unless accepted.declarations.any (fun fact =>
       fact.name == `Tests.Fixtures.Core.successor && fact.needsContract && fact.hasContract) do
     throwError "The compiled public core operation lost its contract"
+  for name in #[`Tests.Fixtures.Core.Box._sizeOf_1, `Tests.Fixtures.Core.Box.value._default] do
+    unless accepted.declarations.any (fun fact => fact.name == name && !fact.needsContract) do
+      throwError "{name}: a compiler-generated structure helper requires a Contract"
   unless accepted.declarations.any (fun fact =>
       privateToUserName fact.name == `Tests.Fixtures.Foreign.replacement &&
         fact.external && fact.foreignEvidence) do
@@ -73,7 +98,8 @@ run_cmd Lean.Elab.Command.liftCoreM do
       ("EffectBox.ofNat", "missing Contract"),
       ("startup", "effects in core"), ("unregistered", "unregistered foreign"),
       ("Rejected.raw", "nonstandard axioms"), ("Rejected.hole", "nonstandard axioms"),
-      ("spoof._unsafe_rec", "missing Contract"), ("redirected", "forbidden dependencies")] do
+      ("spoof._unsafe_rec", "missing Contract"), ("Box.value._default", "missing Contract"),
+      ("redirected", "forbidden dependencies")] do
     expectViolation errors name reason
   let tooling := { project with
     modules := project.modules.push ⟨`Tests.Fixtures.Rejected, .tooling⟩ }

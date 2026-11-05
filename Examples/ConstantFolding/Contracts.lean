@@ -61,7 +61,7 @@ ProvenTheorem fold_idempotent : ∀ (e : Expr), fold (fold e) = fold e :=
 
 private theorem combine_size (a b : Expr) :
     nodeCount (combine a b) ≤ 1 + nodeCount a + nodeCount b := by
-  cases a <;> cases b <;> simp [combine, nodeCount] <;> omega
+  cases a <;> cases b <;> simp [combine, nodeCount]
 
 ProvenTheorem fold_never_grows : LeanEvidence.Contract nodeCount (fun size =>
     ∀ (e : Expr), size (fold e) ≤ size e) :=
@@ -80,5 +80,21 @@ UnitTest fold_nested_literals :
 
 UnitTest fold_with_variable :
     fold (.add (.var 0) (.add (.lit 3) (.lit 4))) = .add (.var 0) (.lit 7)
+
+Requirements obligations where
+  proof evaluation_soundness : LeanEvidence.Contract eval (fun evaluate =>
+    ∀ (env : Nat → Nat) (e : Expr), Evaluates env e (evaluate env e)) := eval_sound
+  proof evaluation_completeness : ∀ (env : Nat → Nat) (e : Expr) (v : Nat),
+    Evaluates env e v → eval env e = v := eval_complete
+  proof meaning_preservation : LeanEvidence.Contract fold (fun optimize =>
+    ∀ (env : Nat → Nat) (e : Expr) (v : Nat),
+      Evaluates env (optimize e) v ↔ Evaluates env e v) := fold_preserves_meaning
+  proof idempotence : ∀ (e : Expr), fold (fold e) = fold e := fold_idempotent
+  proof size_bound : LeanEvidence.Contract nodeCount (fun size =>
+    ∀ (e : Expr), size (fold e) ≤ size e) := fold_never_grows
+  test nested_literals :
+    fold (.add (.lit 2) (.add (.lit 3) (.lit 4))) = .lit 9 := fold_nested_literals
+  test with_variable :
+    fold (.add (.var 0) (.add (.lit 3) (.lit 4))) = .add (.var 0) (.lit 7) := fold_with_variable
 
 end Examples.ConstantFolding

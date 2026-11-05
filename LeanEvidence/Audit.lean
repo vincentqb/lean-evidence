@@ -38,6 +38,11 @@ private def generatedParent? (env : Environment) (info : ConstantInfo) : CoreM (
     return some info.name.getPrefix
   if let some parent := Compiler.isUnsafeRecName? info.name then return some parent
   let parent := info.name.getPrefix
+  if let some projection := env.getProjectionFnInfo? parent then
+    if owner? env parent == owner? env info.name &&
+        (info.name == mkDefaultFnOfProjFn parent ||
+          info.name == mkInheritedDefaultFnOfProjFn parent) then
+      return inductiveParent? env projection.ctorName
   if isAuxRecursor env info.name || isNoConfusion env info.name then
     return inductiveParent? env parent
   if info.name == parent.str "go" && isAuxRecursor env parent &&
@@ -64,11 +69,11 @@ private def generatedParent? (env : Environment) (info : ConstantInfo) : CoreM (
     let instanceName := ind ++ `_sizeOf_inst
     if Meta.isInstanceCore env instanceName then
       if let some instanceInfo := env.find? instanceName then
-        if instanceInfo.type.getAppFn.constName? == some ``SizeOf &&
+        if instanceInfo.type.getForallBody.getAppFn.constName? == some ``SizeOf &&
             (instanceInfo.value?).any (·.getUsedConstants.contains info.name) then
           return some ind
     if info.name == instanceName && Meta.isInstanceCore env info.name &&
-        info.type.getAppFn.constName? == some ``SizeOf then
+        info.type.getForallBody.getAppFn.constName? == some ``SizeOf then
       return some ind
   return none
 
@@ -228,12 +233,44 @@ def collect (project : Project) (catalog : Array Name) : CoreM Inventory := do
   for (name, info) in env.constants.toList do
     if let some moduleName := owner? env name then
       if catalog.contains moduleName then
-        declarations := declarations.push (← declaration project nativeAxioms info moduleName)
-  return { modules, declarations := declarations.qsort (fun a b => a.name.toString < b.name.toString) }
+        declarations := declarations.push
+          (← withCurrHeartbeats <| declaration project nativeAxioms info moduleName)
+  let mut claims := #[]
+  for name in project.requirements do
+    if !(env.contains name) then continue
+    let some moduleName := owner? env name
+      | throwError "{name}: cannot locate required inventory"
+    unless catalog.contains moduleName do
+      throwError "{name}: requirements must belong to a classified project module"
+    let checked ← withCurrHeartbeats <| Meta.MetaM.run' <| validateRequirements name
+    for claim in checked do
+      for declarationName in #[claim.name] ++ claim.evidence.toArray do
+        unless (owner? env declarationName).any catalog.contains do
+          throwError "{declarationName}: required evidence must belong to a classified project module"
+    claims := claims ++ checked
+  return {
+    modules
+    declarations := declarations.qsort (fun a b => a.name.toString < b.name.toString)
+    claims
+  }
 
 def violations (project : Project) (catalog : Array Name) (inventory : Inventory) : Array String :=
   Id.run do
     let mut errors := #[]
+    if project.requirements.isEmpty then
+      errors := errors.push "Select at least one compiled Requirements inventory"
+    unless decide project.requirements.toList.Nodup do
+      errors := errors.push "Duplicate required inventories"
+    unless decide (inventory.claims.toList.map (·.name)).Nodup do
+      errors := errors.push "Duplicate required claims"
+    for name in project.requirements do
+      unless inventory.claims.any (·.inventory == name) do
+        errors := errors.push s!"Missing required inventory: {name}"
+    for claim in inventory.claims do
+      unless project.requirements.contains claim.inventory do
+        errors := errors.push s!"Unexpected required inventory: {claim.inventory}"
+      unless claim.isComplete do
+        errors := errors.push s!"Outstanding {repr claim.kind} requirement: {claim.name}"
     unless decide (project.modules.toList.map (·.name)).Nodup do
       errors := errors.push "Duplicate module classifications"
     for name in catalog do
@@ -273,7 +310,7 @@ def violations (project : Project) (catalog : Array Name) (inventory : Inventory
 
 def check (project : Project) (catalog : Array Name) : CoreM Inventory := do
   let inventory ← collect project catalog
-  unless project.check catalog inventory do
+  unless project.isComplete catalog inventory do
     let errors := String.intercalate "\n" (violations project catalog inventory).toList
     throwError "Project audit failed:\n{errors}"
   return inventory
@@ -309,6 +346,7 @@ def inspect (project : Project) (catalog : Array Name) : IO Inventory := do
     for dependency in dependencies do imported := imported.insert dependency
   let mut modules : Std.HashMap Name ModuleFact := {}
   let mut declarations : Std.HashMap (Name × Name) DeclarationFact := {}
+  let mut claims : Std.HashMap Name ClaimFact := {}
   for root in catalog.filter (fun name => !imported.contains name) do
     let inventory ← Report.withEnvironment #[{ module := root }] do
       let env ← getEnv
@@ -318,20 +356,28 @@ def inspect (project : Project) (catalog : Array Name) : IO Inventory := do
       let key := (fact.moduleName, fact.name)
       let fact := (declarations[key]?).map (merge · fact) |>.getD fact
       declarations := declarations.insert key fact
+    for claim in inventory.claims do
+      if let some previous := claims[claim.name]? then
+        unless previous.inventory == claim.inventory && previous.kind == claim.kind &&
+            previous.evidence == claim.evidence && previous.verified == claim.verified do
+          throw <| IO.userError s!"Conflicting compiled requirement: {claim.name}"
+      claims := claims.insert claim.name claim
   let inventory := {
     modules := modules.toArray.map Prod.snd |>.qsort (fun a b => a.name.toString < b.name.toString)
     declarations := declarations.toArray.map Prod.snd |>.qsort (fun a b =>
       if a.moduleName == b.moduleName then a.name.toString < b.name.toString
       else a.moduleName.toString < b.moduleName.toString)
+    claims := claims.toArray.map Prod.snd |>.qsort (fun a b => a.name.toString < b.name.toString)
     : Inventory
   }
-  unless project.check catalog inventory do
+  unless project.isComplete catalog inventory do
     throw <| IO.userError <|
       "Project audit failed:\n" ++ String.intercalate "\n" (violations project catalog inventory).toList
   return inventory
 
 def run (project : Project) (catalog : Array Name) : IO Unit := do
   let inventory ← inspect project catalog
-  IO.println s!"Checked {inventory.modules.size} modules and {inventory.declarations.size} declarations"
+  IO.println s!"Checked {inventory.modules.size} modules, {inventory.declarations.size} declarations, \
+    and {inventory.claims.size} required claims"
 
 end LeanEvidence.Audit

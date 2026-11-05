@@ -38,6 +38,11 @@ theorem hole : False := by sorry
 
 def spoof._unsafe_rec (n : Nat) : Nat := n + 1
 
+structure Box (α : Type) where
+  value : α
+
+def Box.value._default {α : Type} (value : α) : α := value
+
 def runtimeHelper (n : Nat) : Nat := n + 1
 
 def redirected (n : Nat) : Nat := n + 1

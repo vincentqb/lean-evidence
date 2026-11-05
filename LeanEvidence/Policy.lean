@@ -35,6 +35,7 @@ structure ModuleRule where
 
 structure Project where
   modules : Array ModuleRule
+  requirements : Array Name := #[]
   trusted : Array Name := #[`Init, `Std, `Lean, `Lake]
   deriving Inhabited, Repr
 
@@ -137,6 +138,7 @@ def ModuleFact.Compliant (project : Project) (fact : ModuleFact) : Prop :=
 structure Inventory where
   modules : Array ModuleFact
   declarations : Array DeclarationFact
+  claims : Array ClaimFact := #[]
   deriving Inhabited, Repr
 
 @[expose] def Project.check (project : Project) (catalog : Array Name)
@@ -160,5 +162,9 @@ def Project.Compliant (project : Project) (catalog : Array Name)
   (∀ fact ∈ inventory.modules, fact.Compliant project) ∧
   (∀ fact ∈ inventory.declarations,
     ∃ role, project.role? fact.moduleName = some role ∧ fact.Compliant project role)
+
+@[expose] def Project.isComplete (project : Project) (catalog : Array Name)
+    (inventory : Inventory) : Bool :=
+  project.check catalog inventory && Claims.isComplete project.requirements inventory.claims
 
 end LeanEvidence

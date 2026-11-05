@@ -24,34 +24,44 @@ def project : Project := {
     ⟨`Examples.ConstantFolding.Contracts, .core⟩,
     ⟨`LeanEvidenceAudit, .tooling⟩
   ]
+  requirements := #[`LeanEvidence.Contracts.obligations, `LeanEvidence.Contracts.reportObligations,
+    `Examples.ConstantFolding.obligations]
 }
 
 def run (catalog : Array Name) : IO Unit := do
   let inventory ← Audit.inspect project catalog
-  let (contracts, examples) ← Report.withEnvironment #[{ module := `LeanEvidence.Contracts },
+  let (snapshot, available) ← Report.withEnvironment #[{ module := `LeanEvidence.Contracts },
       { module := `LeanEvidence.Report }, { module := `Examples }] do
-    return (← Report.collectEntries `LeanEvidence.Contracts,
-      ← Report.collectEntries `Examples.ConstantFolding)
-  unless !contracts.isEmpty && contracts.all (fun e =>
-      e.evidence.kind == .proven && e.evidence.isComplete &&
-      !e.evidence.ownHole && e.evidence.assumptions.isEmpty &&
+    let snapshot ← Report.collect project.requirements
+    let env ← getEnv
+    return (snapshot, Report.entryNames env `LeanEvidence.Contracts ++
+      Report.entryNames env `Examples.ConstantFolding)
+  unless snapshot.isComplete && (Claims.outstanding snapshot.facts).isEmpty do
+    throw <| IO.userError "Required evidence is incomplete"
+  unless snapshot.claims.size == inventory.claims.size && snapshot.facts.all (fun claim =>
+      inventory.claims.any (fun checked =>
+        claim.name == checked.name && claim.inventory == checked.inventory &&
+          claim.kind == checked.kind && claim.evidence == checked.evidence &&
+          claim.verified == checked.verified)) do
+    throw <| IO.userError "Architecture audit and evidence report disagree on required claims"
+  unless available.all (fun name => snapshot.evidence.any (·.name == name)) do
+    throw <| IO.userError "A library or example contract is missing from its Requirements inventory"
+  unless snapshot.evidence.all (fun e =>
+      e.evidence.isComplete && !e.evidence.ownHole && e.evidence.assumptions.isEmpty &&
       e.axioms.all standardAxioms.contains && e.source.isSome) do
-    throw <| IO.userError "Library contracts lost a kernel-checked contract or its imported metadata"
-  unless examples.size == 7 &&
-      (examples.filter (·.evidence.kind == .proven)).size == 5 &&
-      (examples.filter (·.evidence.kind == .unitTest)).size == 2 do
-    throw <| IO.userError "Example must distinguish five universal proofs from two finite tests"
-  unless examples.all (fun e =>
-      e.axioms.all standardAxioms.contains && e.source.isSome) do
-    throw <| IO.userError "Imported example lost its proof audit or source metadata"
-  let report := Json.arr ((contracts ++ examples).map Report.entryToJson)
+    throw <| IO.userError "Required evidence lost its kernel proof or source metadata"
+  unless snapshot.claims.all (·.source.isSome) do
+    throw <| IO.userError "A required claim lost its source metadata"
+  let report := snapshot.toJson
   let path : System.FilePath := "/tmp/lean-evidence-audit.json"
   IO.FS.writeFile path report.pretty
   let reread ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
   unless reread == report do
     throw <| IO.userError "Writing and parsing the JSON report changed its evidence"
   IO.println s!"Checked {inventory.modules.size} modules, {inventory.declarations.size} declarations, \
-    {contracts.size} library proofs, 5 example proofs, and 2 finite tests; report: {path}"
+    and {snapshot.claims.size} required claims \
+    ({snapshot.theoremIndex.size} proofs, \
+    {(snapshot.facts.filter (·.kind == .test)).size} tests); report: {path}"
 
 end LeanEvidenceAudit
 

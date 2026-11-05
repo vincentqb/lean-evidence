@@ -42,9 +42,14 @@ ProvenTheorem receipt_counts : Contract TestResults.merge (fun merge =>
     simp only [List.foldl_cons]
     constructor
     · rw [h.1]
-      simp [TestResults.merge, TestResults.ofResult, Nat.add_assoc] <;> omega
+      simp [TestResults.merge, TestResults.ofResult, Nat.add_assoc]
+      omega
     · rw [h.2]
-      cases passed <;> simp [TestResults.merge, TestResults.ofResult, Nat.add_assoc] <;> omega
+      cases passed with
+      | false => simp [TestResults.merge, TestResults.ofResult]
+      | true =>
+        simp [TestResults.merge, TestResults.ofResult, Nat.add_assoc]
+        omega
 
 ProvenTheorem merge_preserves_bounds : ∀ (a b : TestResults),
     a.passed ≤ a.total → b.passed ≤ b.total →
@@ -57,13 +62,57 @@ ProvenTheorem tested_iff : Contract TestResults.verdict (fun verdict =>
     ∀ r : TestResults, verdict r = some .tested ↔ 0 < r.total ∧ r.passed = r.total) := by
   intro r
   by_cases zero : r.total = 0 <;> by_cases passed : r.passed = r.total <;>
-    simp [TestResults.verdict, zero, passed] <;> omega
+    simp [TestResults.verdict, zero, passed, Nat.pos_iff_ne_zero]
 
 ProvenTheorem failing_iff : ∀ r : TestResults,
     r.verdict = some .failing ↔ 0 < r.total ∧ r.passed ≠ r.total := by
   intro r
   by_cases zero : r.total = 0 <;> by_cases passed : r.passed = r.total <;>
-    simp [TestResults.verdict, zero, passed] <;> omega
+    simp [TestResults.verdict, zero, passed, Nat.pos_iff_ne_zero]
+
+ProvenTheorem requirement_complete_iff : Contract (@Requirement.isComplete) (fun complete =>
+    ∀ (statement : Prop) (r : Requirement statement),
+      complete r = true ↔ ∃ witness, r.witness = some witness) := by
+  intro statement r
+  simp [Requirement.isComplete, Option.isSome_iff_exists]
+
+ProvenTheorem requirement_complete_sound : ∀ (statement : Prop) (r : Requirement statement),
+    r.isComplete = true → statement := by
+  intro statement r complete
+  obtain ⟨witness, _⟩ := (requirement_complete_iff statement r).mp complete
+  exact witness.down
+
+ProvenTheorem claim_complete_iff : Contract ClaimFact.isComplete (fun complete =>
+    ∀ claim, complete claim = true ↔ claim.verified = true ∧
+      ∃ evidence, claim.evidence = some evidence) := by
+  intro claim
+  simp [ClaimFact.isComplete, Option.isSome_iff_exists]
+
+ProvenTheorem claims_complete_iff : Contract Claims.isComplete (fun complete =>
+    ∀ inventories claims, complete inventories claims = true ↔ Claims.Complete inventories claims) := by
+  intro inventories claims
+  simp only [Claims.isComplete, Claims.Complete, Bool.and_eq_true, Bool.not_eq_true',
+    Array.isEmpty_eq_false_iff, decide_eq_true_eq, Array.all_eq_true', Array.any_eq_true',
+    beq_iff_eq, Array.contains_iff_mem, ClaimFact.isComplete, Bool.and_eq_true,
+    Option.isSome_iff_exists]
+  grind
+
+ProvenTheorem outstanding_iff : Contract Claims.outstanding (fun pending =>
+    ∀ claims name, name ∈ pending claims ↔ ∃ claim ∈ claims,
+      claim.name = name ∧ (claim.verified = false ∨ claim.evidence = none)) := by
+  intro claims name
+  simp [Claims.outstanding, ClaimFact.isComplete, Array.mem_filter]
+  grind
+
+ProvenTheorem complete_has_no_outstanding : ∀ inventories claims,
+    Claims.isComplete inventories claims = true → Claims.outstanding claims = #[] := by
+  intro inventories claims complete
+  have satisfied := ((claims_complete_iff inventories claims).mp complete).2.2.2.2
+  apply Array.eq_empty_iff_forall_not_mem.mpr
+  intro name member
+  obtain ⟨claim, member, _, incomplete⟩ := (outstanding_iff claims name).mp member
+  obtain ⟨_, verified, evidence, present⟩ := satisfied claim member
+  simp_all
 
 ProvenTheorem proof_required_iff : Contract EvidenceKind.requiresProof (fun requires =>
     ∀ kind : EvidenceKind, requires kind = true ↔ kind = .proven ∨ kind = .unitTest) := by
@@ -156,5 +205,89 @@ ProvenTheorem project_check_iff : Contract Project.check (fun check =>
     Array.all_eq_true', Array.any_eq_true',
     beq_iff_eq, Array.contains_iff_mem, moduleCheck, and_assoc]
   grind
+
+ProvenTheorem project_complete_iff : Contract Project.isComplete (fun complete =>
+    ∀ project catalog inventory, complete project catalog inventory = true ↔
+      project.Compliant catalog inventory ∧
+        Claims.Complete project.requirements inventory.claims) := by
+  intro project catalog inventory
+  rw [Project.isComplete, Bool.and_eq_true]
+  exact and_congr (project_check_iff project catalog inventory)
+    (claims_complete_iff project.requirements inventory.claims)
+
+Requirements obligations where
+  proof standard_axioms : Contract nonstandardAxioms (fun classify =>
+    ∀ axioms : Array Name, (classify axioms).isEmpty = true ↔
+      ∀ ax ∈ axioms, ax = ``propext ∨ ax = ``Classical.choice ∨ ax = ``Quot.sound) :=
+    standard_axioms_iff
+  proof assumption_names : Contract Evidence.assumptionNames (fun names =>
+    ∀ (e : Evidence) (n ax : Name), ax ∈ names e n ↔
+      (e.ownHole = true ∧ ax = n) ∨ (e.ownHole = false ∧ ax ∈ e.assumptions)) :=
+    assumption_names_iff
+  proof result_counts : Contract TestResults.ofResult (fun record =>
+    ∀ passed, (record passed).total = 1 ∧
+      (record passed).passed = if passed then 1 else 0) := result_counts
+  proof receipt_counts : Contract TestResults.merge (fun merge =>
+    ∀ (initial : TestResults) (attempts : List Bool),
+    let results := attempts.foldl (fun r passed => merge r (TestResults.ofResult passed)) initial
+    results.total = initial.total + attempts.length ∧
+      results.passed = initial.passed + (attempts.filter id).length) := receipt_counts
+  proof merge_bounds : ∀ (a b : TestResults),
+    a.passed ≤ a.total → b.passed ≤ b.total →
+      (a.merge b).passed ≤ (a.merge b).total := merge_preserves_bounds
+  proof tested : Contract TestResults.verdict (fun verdict =>
+    ∀ r : TestResults, verdict r = some .tested ↔ 0 < r.total ∧ r.passed = r.total) :=
+    tested_iff
+  proof failing : ∀ r : TestResults,
+    r.verdict = some .failing ↔ 0 < r.total ∧ r.passed ≠ r.total := failing_iff
+  proof requirement_completion : Contract (@Requirement.isComplete) (fun complete =>
+    ∀ (statement : Prop) (r : Requirement statement),
+      complete r = true ↔ ∃ witness, r.witness = some witness) := requirement_complete_iff
+  proof requirement_soundness : ∀ (statement : Prop) (r : Requirement statement),
+    r.isComplete = true → statement := requirement_complete_sound
+  proof claim_completion : Contract ClaimFact.isComplete (fun complete =>
+    ∀ claim, complete claim = true ↔ claim.verified = true ∧
+      ∃ evidence, claim.evidence = some evidence) := claim_complete_iff
+  proof inventory_completion : Contract Claims.isComplete (fun complete =>
+    ∀ inventories claims, complete inventories claims = true ↔
+      Claims.Complete inventories claims) := claims_complete_iff
+  proof outstanding : Contract Claims.outstanding (fun pending =>
+    ∀ claims name, name ∈ pending claims ↔ ∃ claim ∈ claims,
+      claim.name = name ∧ (claim.verified = false ∨ claim.evidence = none)) := outstanding_iff
+  proof no_outstanding : ∀ inventories claims,
+    Claims.isComplete inventories claims = true → Claims.outstanding claims = #[] :=
+    complete_has_no_outstanding
+  proof proof_required : Contract EvidenceKind.requiresProof (fun requires =>
+    ∀ kind : EvidenceKind, requires kind = true ↔ kind = .proven ∨ kind = .unitTest) :=
+    proof_required_iff
+  proof evidence_completion : Contract Evidence.isComplete (fun complete =>
+    ∀ e : Evidence, complete e = true ↔ e.kind = .proven ∨ e.kind = .unitTest ∨
+      (e.kind = .derived ∧ e.assumptions = #[])) := complete_iff
+  proof evidence_labels : ∀ (a b : EvidenceKind), toString a = toString b ↔ a = b :=
+    evidence_labels_injective
+  proof role_permissions : Contract Role.permits (fun permits =>
+    ∀ source target, permits source target = true ↔ source.Allows target) := role_permits_iff
+  proof role_lookup : Contract Project.role? (fun lookup =>
+    ∀ project name role, lookup project name = some role →
+      ∃ rule ∈ project.modules, rule.name = name ∧ rule.role = role) := role_lookup
+  proof trusted_modules : Contract Project.isTrusted (fun trusted =>
+    ∀ project name, trusted project name = true ↔
+      ∃ root ∈ project.trusted, root.isPrefixOf name = true) := trusted_iff
+  proof dependency_permissions : Contract Project.permits (fun permits =>
+    ∀ project source target comptime, permits project source target comptime = true ↔
+      project.Allows source target comptime) := dependency_permits_iff
+  proof declarations : Contract DeclarationFact.check (fun check =>
+    ∀ project role fact, check project role fact = true ↔ fact.Compliant project role) :=
+    declaration_check_iff
+  proof modules : Contract ModuleFact.check (fun check =>
+    ∀ project fact, check project fact = true ↔ fact.Compliant project) := module_check_iff
+  proof project_policy : Contract Project.check (fun check =>
+    ∀ project catalog inventory,
+      check project catalog inventory = true ↔ project.Compliant catalog inventory) :=
+    project_check_iff
+  proof project_completion : Contract Project.isComplete (fun complete =>
+    ∀ project catalog inventory, complete project catalog inventory = true ↔
+      project.Compliant catalog inventory ∧
+        Claims.Complete project.requirements inventory.claims) := project_complete_iff
 
 end LeanEvidence.Contracts
