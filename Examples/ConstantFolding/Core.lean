@@ -25,7 +25,8 @@ private theorem eval_combine (env : Nat → Nat) (a b : Expr) :
     eval env (combine a b) = eval env a + eval env b := by
   cases a <;> cases b <;> rfl
 
-theorem eval_fold (env : Nat → Nat) (e : Expr) : eval env (fold e) = eval env e := by
+theorem fold_preserves_meaning (env : Nat → Nat) (e : Expr) :
+    eval env (fold e) = eval env e := by
   induction e <;> simp_all [fold, eval, eval_combine]
 
 theorem evalNative_eq (agrees : NativeAddAgrees) (env : Nat → Nat) (e : Expr) :
@@ -37,7 +38,7 @@ theorem evalNative_eq (agrees : NativeAddAgrees) (env : Nat → Nat) (e : Expr) 
     simp only [evalNative, eval, ha, hb]
     exact agrees _ _
 
-theorem closed_folds (e : Expr) (h : closed e = true) : ∃ n, fold e = .lit n := by
+theorem fold_closed_literal (e : Expr) (h : closed e = true) : ∃ n, fold e = .lit n := by
   induction e with
   | lit n => exact ⟨n, rfl⟩
   | var x => simp [closed] at h
@@ -57,7 +58,6 @@ theorem fixed_of_normal (e : Expr) (h : normal e = true) : fold e = e := by
     simp only [fold, ha na, hb nb]
     cases a <;> cases b <;> simp_all [combine, Expr.isLit]
 
-Test Normalizes fold : normal (fold (.add (.lit 2) (.add (.lit 3) (.var 0)))) = true := by decide
-Test Normalizes fold : normal (fold (.add (.add (.lit 1) (.lit 2)) (.lit 3))) = true := by decide
+Test Normalizes fold : normal (fold (.add (.add (.lit 1) (.lit 2)) (.var 0))) = true := by decide
 
 end Examples.ConstantFolding

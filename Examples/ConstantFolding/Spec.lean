@@ -13,7 +13,6 @@ inductive Expr where
   | lit (value : Nat)
   | var (index : Nat)
   | add (left right : Expr)
-  deriving Repr, DecidableEq
 
 /-- The meaning of an expression under a variable assignment. -/
 @[expose] def eval (env : Nat → Nat) : Expr → Nat
@@ -41,8 +40,7 @@ inductive Expr where
 falsifies it. -/
 WorldClaim NativeAddAgrees := ∀ a b, nativeAdd a b = a + b
 
-Check NativeAddAgrees : nativeAdd 2 3 = 2 + 3
-Check NativeAddAgrees : nativeAdd (2 ^ 70) 1 = 2 ^ 70 + 1
+Check NativeAddAgrees : nativeAdd (2 ^ 70) (2 ^ 70) = 2 ^ 71
 
 /-- One pass of `optimize` leaves no addition of two literals. -/
 Conjecture Normalizes (optimize : Expr → Expr) := ∀ e, normal (optimize e) = true

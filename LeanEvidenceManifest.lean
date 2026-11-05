@@ -8,15 +8,16 @@ public section
 # Constant folding
 
 Folding preserves meaning, removes every constant subexpression of a closed expression,
-and the printed result is the true value. Not claimed: optimality for expressions with
-variables beyond one pass, or anything about the native adder beyond `NativeAddAgrees`.
+and the printed result is the true value. Not claimed: folding constant subexpressions next
+to variables, which `Normalizes` only conjectures, or anything about the native adder beyond
+`NativeAddAgrees`.
 -/
 
 namespace Examples.ConstantFolding
 
-@[expose] def fold : Expr → Expr := sorry
+def fold : Expr → Expr := sorry
 
-@[expose] def Shell.output (e : Expr) : String := sorry
+def Shell.output (e : Expr) : String := sorry
 
 theorem fold_preserves_meaning (env : Nat → Nat) (e : Expr) :
     eval env (fold e) = eval env e := by
