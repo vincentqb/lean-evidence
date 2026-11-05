@@ -1,58 +1,57 @@
 # LeanEvidence
 
-Keep the claims you do not want to lose, for software written in **Lean 4.35.0**.
-Headline theorems live in a protected `Manifest.lean`; `lake comparator` checks that the
-implementation proves exactly those statements. Assumptions about the outside world and
-unfinished claims are hypotheses of those theorems, so nothing uses `sorry` and the report
-reads each headline's evidence from its type. `lake build` audits what Lean does not enforce.
+For software written in **Lean 4.35.0**: state the theorems you never want to lose in files
+agents cannot edit, and let the build check that the code still proves them and that the
+proofs cover the code that runs.
 
-| Role | Holds | Known correct by |
+## Files
+
+| File | Contains | Edited by |
 |---|---|---|
-| `spec` | types, reference semantics, `WorldClaim`s, `Conjecture`s | you |
-| `boundary` | `@[extern]` declarations only | assumptions, checked at build time |
-| `core` | pure, total code: public interface, private helpers, proofs | kernel proofs |
-| `shell` | IO glue; decisions belong in core | E2E tests |
-| `tooling` | headline proofs, audits, scripts | never reached at runtime |
+| `MyApp/Spec.lean` | types, reference definitions, and the claims headlines rest on | you |
+| `MyApp/Boundary.lean` | `@[extern]` declarations for foreign code | you |
+| `MyApp/Core/…` | pure code: public interface, private helpers, and their proofs | agents |
+| `MyApp/Shell.lean` | IO that connects the core to the world | agents |
+| `Manifest.lean` | headline theorems, stated with `sorry` | you |
+| `Claims.lean` | proofs of the headline theorems | agents |
+| `comparator.json` | the headlines and the functions they constrain | you |
+| `Scripts/Audit.lean` | the role of each module prefix | you |
 
-Lean's module system already keeps helpers private, hides unexposed bodies, and keeps
-proofs and `meta` code out of binaries. The audit adds the rest: every module has a role,
-runtime imports never leave spec/boundary/core for the shell, spec and core code has no
-escape hatch (`partial`, `unsafe`, `@[extern]`, `@[implemented_by]`, initializers, IO,
-`dbgTrace`), and only standard axioms appear. `layering_sound` in
-[`LeanEvidence/Policy.lean`](LeanEvidence/Policy.lean) proves the per-module import rule
-transitive: once the audit accepts, no runtime import chain leads from spec, boundary, or core
-to the shell.
+Headlines are end-to-end theorems: they say what the program does in terms of the spec,
+assuming only named claims. In the [template](Examples/ConstantFolding), `output_correct`
+says the shell prints the true value of an expression, assuming native addition is correct.
 
-The [constant-folding template](Examples/ConstantFolding) shows each piece:
+## Syntax
 
 ```lean
 /-- The runtime's native addition agrees with `Nat.add`. A different sum for any pair
 falsifies it. -/
 WorldClaim NativeAddAgrees := ∀ a b, nativeAdd a b = a + b
 Check NativeAddAgrees : nativeAdd (2 ^ 70) 1 = 2 ^ 70 + 1
+@[exercises NativeAddAgrees] def nativeAddSuite : IO Unit := ...
 
 Conjecture Normalizes (optimize : Expr → Expr) := ∀ e, normal (optimize e) = true
-Test Normalizes fold : normal (fold (.add (.lit 1) (.lit 2))) = true := by decide
+Test Normalizes fold : normal (fold (.add (.add (.lit 1) (.lit 2)) (.lit 3))) = true := by decide
 
 theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
     Shell.output e = toString (eval (fun _ => 0) e)
 ```
 
-`Test` proves an instance in the kernel; `Check` compiles and runs it during the build,
-including foreign code. Assumptions only a running system can exercise, such as system
-calls, rest on live suites marked `@[exercises Claim]`; keep those suites in a default target
-so the audit sees them. The audit reports each headline:
+- `WorldClaim Name := P` names an assumption about the world; its doc comment names the
+  observation that would falsify it.
+- `Check Claim : instance` runs one instance of a claim during the build, foreign code included.
+- `@[exercises Claim]` marks a live suite that exercises a claim while the program runs.
+- `Conjecture Name := P` names a claim not yet proved; a theorem of type `Name` discharges it.
+- `Test Claim : instance := proof` proves one instance of a claim in the kernel.
+- A headline takes the claims it rests on as hypotheses; `lake build` reports it proved (●)
+  once its conjectures are proved and derived (◕) until then.
 
-```text
-◕ Examples.ConstantFolding.fold_idempotent  (open Examples.ConstantFolding.Normalizes [2 tests, 0 checks, 0 suites])
-● Examples.ConstantFolding.output_correct  (world Examples.ConstantFolding.NativeAddAgrees [0 tests, 2 checks, 0 suites])
-```
+Claims live in spec modules, and every world assumption a headline uses needs a `Check`,
+suite, or `Test`.
 
-A headline is proved (●) when every premise is a world assumption or a proved conjecture.
-Every world assumption needs a `Test`, `Check`, or live suite, and every hypothesis that
-mentions no variable of the statement must be a claim, so no assumption hides as a plain `Prop`.
+## Setup
 
-## Use it
+In `lakefile.lean`:
 
 ```lean
 require lean_evidence from git "https://github.com/vincentqb/lean-evidence" @ "main"
@@ -62,7 +61,7 @@ target audit pkg : Unit := do
   return (← pkg.toPackage.fetchFacetJob `leanEvidence).map (fun _ => ())
 ```
 
-`Scripts/Audit.lean` assigns roles by module prefix; the longest prefix wins:
+In `Scripts/Audit.lean`, the longest matching prefix gives each module its role:
 
 ```lean
 module
@@ -78,18 +77,25 @@ def main (args : List String) : IO Unit :=
   } (args.toArray.map String.toName)
 ```
 
+- `.spec` and `.boundary` modules hold what you own; boundary code is `@[extern]` only.
+- `.core` code is pure and total: no `partial`, `unsafe`, `@[extern]`, `@[implemented_by]`,
+  initializers, IO, or `dbg*`.
+- `.shell` code may do IO but reaches foreign code only through the boundary.
+- `.tooling` covers proofs and scripts, which runtime code never imports.
+
 `Manifest.lean` imports only spec modules, states each headline with `sorry`, and declares
-the implementation functions it mentions as definition holes. `comparator.json` names the
-headlines and holes; `Claims.lean`, a default target, proves them. Keep `Manifest` out of the
-default targets, and make `Spec`, `Boundary`, `Manifest`,
-`comparator.json`, `Scripts/Audit.lean`, `lakefile.lean`, and `lake-manifest.json` read-only
-for agents.
+each function a headline mentions as a hole, `def name : Type := sorry`; `comparator.json`
+lists the headlines and holes. Keep `Manifest` out of the default targets.
+
+## Run
 
 ```sh
-lake build && lake test && lake comparator
+lake build        # audit and headline report
+lake test         # your tests, including the live suites
+lake comparator   # Claims.lean proves exactly the statements in Manifest.lean
 ```
 
-`Check`s on foreign code compile the boundary natively (`precompileModules`). Where the
-bundled clang cannot run, set `LEAN_CC` and build the challenge module before
-`lake comparator`, whose sandbox then reuses the native artifacts. Use `lake check --paranoid`
-in CI to replay the build through Lean's independent kernels.
+Make the files you own read-only for agents, along with `lakefile.lean` and
+`lake-manifest.json`. `Check` on foreign code needs `precompileModules`; where the bundled
+clang cannot run, set `LEAN_CC` and build the manifest before `lake comparator`. Use
+`lake check --paranoid` in CI.
