@@ -10,10 +10,14 @@ open Lean Elab Command
 
 namespace LeanEvidence
 
+inductive EvidenceKind where
+  | test | check | suite
+  deriving BEq, ReflBEq, LawfulBEq, DecidableEq, Inhabited, Repr
+
 structure Evidence where
   claim : Name
   statement : String
-  native : Bool
+  kind : EvidenceKind
   deriving Inhabited, Repr
 
 initialize claimsExt : SimplePersistentEnvExtension (Name × ClaimKind)
@@ -42,6 +46,9 @@ def registeredClaims (env : Environment) : Array (Name × ClaimKind) :=
 
 def evidenceFor (env : Environment) (claim : Name) : Array Evidence :=
   (evidenceExt.getState env)[claim]?.getD #[]
+
+def allEvidence (env : Environment) : Array Evidence :=
+  (evidenceExt.getState env).fold (init := #[]) fun found _ entries => found ++ entries
 
 def nonstandardAxioms (name : Name) : CoreM (Array Name) :=
   return (← collectAxioms name).filter (!standardAxioms.contains ·)
@@ -77,9 +84,9 @@ private def claimHead (claim : Term) : CommandElabM Name := liftTermElabM do
     throwError "{head} is not a WorldClaim or Conjecture"
   return head
 
-private def record (claim : Name) (inst : Term) (native : Bool) : CommandElabM Unit := do
+private def record (claim : Name) (inst : Term) (kind : EvidenceKind) : CommandElabM Unit := do
   let statement := (inst.raw.reprint.getD (toString inst)).trimAscii.toString
-  modifyEnv (evidenceExt.addEntry · { claim, statement, native })
+  modifyEnv (evidenceExt.addEntry · { claim, statement, kind })
 
 private def requireInstance (claim inst : Term) : CommandElabM Unit := do
   try checked (← `(example : $claim → $inst := fun h => by first | exact h | apply h))
@@ -96,7 +103,7 @@ elab "Test " claim:term " : " inst:term " := " proof:term : command => do
   let axioms ← liftCoreM <| nonstandardAxioms name
   unless axioms.isEmpty do
     throwError "A Test must be kernel-checked; it depends on {axioms}. Use Check to run code."
-  record head inst false
+  record head inst .test
 
 private unsafe def evaluateUnsafe (term : Term) : TermElabM Bool :=
   Term.evalTerm Bool (mkConst ``Bool) term
@@ -108,6 +115,20 @@ elab "Check " claim:term " : " inst:term : command => do
   requireInstance claim inst
   unless ← liftTermElabM (evaluate (← `(decide ($inst)))) do
     throwError "Check failed: {inst} is false when compiled and run"
-  record head inst true
+  record head inst .check
+
+syntax (name := exercises) "exercises " ident : attr
+
+initialize registerBuiltinAttribute {
+  name := `exercises
+  descr := "Marks a live suite as evidence for a claim it exercises at run time."
+  add := fun decl stx kind => do
+    unless kind == .global do throwError "exercises must be a global attribute"
+    let `(attr| exercises $claim:ident) := stx | throwUnsupportedSyntax
+    let name ← realizeGlobalConstNoOverloadWithInfo claim
+    unless (claimKind? (← getEnv) name).isSome do
+      throwError "{name} is not a WorldClaim or Conjecture"
+    modifyEnv (evidenceExt.addEntry · { claim := name, statement := decl.toString, kind := .suite })
+}
 
 end LeanEvidence

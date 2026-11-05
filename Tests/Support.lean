@@ -35,12 +35,13 @@ elab "assert_claim " n:ident " is " kind:ident : command => do
   unless claimKind? (← getEnv) name == some expected do
     throwError "{name}: expected a {kind.getId} claim"
 
-elab "assert_evidence " n:ident " = " tests:num " tests " checks:num " checks" : command => do
+elab "assert_evidence " n:ident " = " tests:num " tests " checks:num " checks " suites:num
+    " suites" : command => do
   let name ← resolveGlobalConstNoOverload n
   let found := evidenceFor (← getEnv) name
-  let kernel := (found.filter (!·.native)).size
-  let native := (found.filter (·.native)).size
-  unless kernel == tests.getNat && native == checks.getNat do
-    throwError "{name}: {kernel} tests and {native} checks"
+  let count := fun kind => (found.filter (·.kind == kind)).size
+  unless count .test == tests.getNat && count .check == checks.getNat &&
+      count .suite == suites.getNat do
+    throwError "{name}: {count .test} tests, {count .check} checks, {count .suite} suites"
 
 end Tests

@@ -82,9 +82,13 @@ run_cmd Elab.Command.liftTermElabM do
     theorems := #[`Tests.Fixtures.uses_unchecked]
     holes := #[`Tests.Fixtures.Mode.idle]
   }
+  let evidence := allEvidence (← getEnv)
   let errors ← Audit.headlineViolations project config
-    #[← Audit.headline `Tests.Fixtures.uses_unchecked]
-  expect errors "Unchecked" "no Test or Check"
+    #[← Audit.headline `Tests.Fixtures.uses_unchecked, ← Audit.headline `Tests.Fixtures.uses_live]
+    evidence
+  expect errors "Unchecked" "no Test, Check, or live suite"
   expect errors "Mode.idle" "core or shell definition"
+  if errors.any (fun error => (error.splitOn "ClockAdvances").length > 1) then
+    throwError "A live suite did not count as evidence: {errors}"
 
 end Tests.Audit

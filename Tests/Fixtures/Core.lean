@@ -46,4 +46,6 @@ theorem uses_discharged (h : EvenFour) : 4 % 2 = 0 := h
 
 theorem uses_unchecked (h : Unchecked) : wrongSucc 0 = 1 := h 0
 
+theorem uses_live (now : Nat → Nat) (h : ClockAdvances now) (t : Nat) : t ≤ now t := h t
+
 end Tests.Fixtures

@@ -1,6 +1,7 @@
 module
 
 public import Tests.Fixtures.Core
+public meta import LeanEvidence
 
 public section
 
@@ -13,5 +14,10 @@ partial def drain (stream : IO.FS.Stream) : IO Unit := do
   unless line.isEmpty do drain stream
 
 def report (n : Nat) : IO Unit := IO.println (successor n)
+
+@[exercises ClockAdvances] def clockSuite : IO Unit := do
+  let first ← IO.monoMsNow
+  let second ← IO.monoMsNow
+  unless first ≤ second do throw (IO.userError "the monotonic clock ran backwards")
 
 end Tests.Fixtures

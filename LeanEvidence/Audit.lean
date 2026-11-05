@@ -115,7 +115,12 @@ private def merge (left right : DeclarationFact) : DeclarationFact := {
     left.axioms
 }
 
-def inspect (project : Project) (catalog : Array Name) : IO Inventory := do
+structure Inspection where
+  inventory : Inventory
+  evidence : Array Evidence
+  deriving Inhabited
+
+def inspect (project : Project) (catalog : Array Name) : IO Inspection := do
   let mut imported : NameSet := {}
   for root in catalog do
     let reached ← withEnvironment #[{ module := root }] do
@@ -124,17 +129,26 @@ def inspect (project : Project) (catalog : Array Name) : IO Inventory := do
     for name in reached do imported := imported.insert name
   let mut modules : Std.HashMap Name ModuleFact := {}
   let mut declarations : Std.HashMap (Name × Name) DeclarationFact := {}
+  let mut evidence : Array Evidence := #[]
   for root in catalog.filter (!imported.contains ·) do
-    let inventory ← withEnvironment #[{ module := root }] do
+    let (inventory, found) ← withEnvironment #[{ module := root }] do
       let env ← getEnv
-      collect project (catalog.filter fun name => (env.getModuleIdx? name).isSome)
+      return (← collect project (catalog.filter fun name => (env.getModuleIdx? name).isSome),
+        allEvidence env)
+    for entry in found do
+      unless evidence.any (fun e => e.claim == entry.claim && e.statement == entry.statement &&
+          e.kind == entry.kind) do
+        evidence := evidence.push entry
     for fact in inventory.modules do modules := modules.insert fact.name fact
     for fact in inventory.declarations do
       let key := (fact.moduleName, fact.name)
       declarations := declarations.insert key ((declarations[key]?).map (merge · fact) |>.getD fact)
   return {
-    modules := modules.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
-    declarations := declarations.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
+    inventory := {
+      modules := modules.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
+      declarations := declarations.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
+    }
+    evidence
   }
 
 def violations (project : Project) (catalog : Array Name) (inventory : Inventory) :
@@ -239,8 +253,8 @@ private partial def challengeImports (project : Project) (root : Name) (pending 
             errors := errors.push s!"{name} imports untrusted {target}"
     challengeImports project root next (seen.insert name) errors
 
-def headlineViolations (project : Project) (config : Config) (headlines : Array Headline) :
-    MetaM (Array String) := do
+def headlineViolations (project : Project) (config : Config) (headlines : Array Headline)
+    (evidence : Array Evidence) : MetaM (Array String) := do
   let env ← getEnv
   let mut errors := #[]
   for (claim, _) in registeredClaims env do
@@ -254,28 +268,26 @@ def headlineViolations (project : Project) (config : Config) (headlines : Array 
     | _ => errors := errors.push s!"{hole}: a definition hole must be a core or shell definition"
   for line in headlines do
     for premise in line.premises do
-      if premise.kind == .world && (evidenceFor env premise.claim).isEmpty then
-        errors := errors.push s!"{line.name}: world assumption {premise.claim} has no Test or Check"
+      if premise.kind == .world && !evidence.any (·.claim == premise.claim) then
+        errors := errors.push
+          s!"{line.name}: world assumption {premise.claim} has no Test, Check, or live suite"
   return errors
 
-private def describe (env : Environment) (premise : Premise) : String :=
-  let found := evidenceFor env premise.claim
-  let tests := (found.filter (!·.native)).size
-  let checks := (found.filter (·.native)).size
+private def describe (evidence : Array Evidence) (premise : Premise) : String :=
+  let count := fun kind => (evidence.filter fun e => e.claim == premise.claim && e.kind == kind).size
   let kind := if premise.kind == .world then "world" else if premise.discharged then "proved" else "open"
-  s!"{kind} {premise.claim} [{tests} tests, {checks} checks]"
+  s!"{kind} {premise.claim} [{count .test} tests, {count .check} checks, {count .suite} suites]"
 
 def run (project : Project) (catalog : Array Name) (configPath : System.FilePath := "comparator.json") :
     IO Unit := do
   let config ← readConfig configPath
-  let inventory ← inspect project catalog
+  let { inventory, evidence } ← inspect project catalog
   let (lines, headlineErrors, report) ← withEnvironment #[{ module := config.solution }] do
     let lines ← Meta.MetaM.run' <| config.theorems.mapM headline
-    let errors ← Meta.MetaM.run' <| headlineViolations project config lines
-    let env ← getEnv
+    let errors ← Meta.MetaM.run' <| headlineViolations project config lines evidence
     let report := lines.map fun line =>
       let mark := if level line.premises == .proved then "●" else "◕"
-      let premises := line.premises.map (describe env)
+      let premises := line.premises.map (describe evidence)
       s!"{mark} {line.name}" ++
         (if premises.isEmpty then "" else s!"  ({String.intercalate "; " premises.toList})")
     return (lines, errors, report)
