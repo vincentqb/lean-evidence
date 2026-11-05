@@ -2,13 +2,19 @@ import Lake
 open Lean Lake DSL
 
 package «lean_evidence» where
+  builtinLint := true
+  fixedToolchain := true
   leanOptions := #[
-    ⟨`autoImplicit, false⟩
+    ⟨`autoImplicit, false⟩,
+    ⟨`linter.redundantVisibility, true⟩,
+    ⟨`linter.extra, true⟩
   ]
 
+@[default_target]
 lean_lib «LeanEvidence» where
   globs := #[.one `LeanEvidence, .submodules `LeanEvidence]
 
+@[default_target]
 lean_lib «Examples» where
   globs := #[.one `Examples, .submodules `Examples]
 
@@ -18,6 +24,7 @@ lean_lib «Tests» where
   precompileModules := true
   needs := #[`@/audit]
 
+@[default_target]
 lean_lib «LeanEvidenceAudit»
 
 private def auditPackage (pkg : Package) (entrypoint : System.FilePath) : FetchM (Job Unit) := do
