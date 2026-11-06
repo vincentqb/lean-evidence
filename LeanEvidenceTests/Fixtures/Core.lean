@@ -41,6 +41,16 @@ theorem uses_live (now : Nat → Nat) (h : ClockAdvances now) (t : Nat) : t ≤ 
 
 theorem bounded (n : Nat) (h : n < 5) : n < 6 := by omega
 
+theorem identity_fixed (n : Nat) : identity n = n := by simp [identity, helper]
+
+theorem identity_fixed_rejects_successor : ¬ ∀ n : Nat, (fun n => n + 1) n = n := by
+  intro h
+  exact absurd (h 0) (by decide)
+
+theorem mismatched_negation : ¬ ∀ n : Nat, n = n + 1 := by
+  intro h
+  exact absurd (h 0) (by decide)
+
 theorem uses_unnamed (h : 1 = 2) : 1 = 2 := h
 
 Conjecture CoreClaim := 1 = 1

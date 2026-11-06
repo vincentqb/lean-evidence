@@ -36,13 +36,15 @@ inductive Expr where
   | .var _ => false
   | .add a b => closed a && closed b
 
-/-- The runtime's native addition agrees with `Nat.add`. A different sum for any pair
-falsifies it. -/
-WorldClaim NativeAddAgrees := ∀ a b, nativeAdd a b = a + b
+/-- The adder agrees with `Nat.add`. A different sum for any pair falsifies it. -/
+WorldClaim AddAgrees (add : Nat → Nat → Nat) := ∀ a b, add a b = a + b
 
-Check NativeAddAgrees : nativeAdd (2 ^ 70) (2 ^ 70) = 2 ^ 71
+Check AddAgrees nativeAdd : nativeAdd (2 ^ 70) (2 ^ 70) = 2 ^ 71
 
 /-- One pass of `optimize` leaves no addition of two literals. -/
 Conjecture Normalizes (optimize : Expr → Expr) := ∀ e, normal (optimize e) = true
+
+/-- Normal, but not idempotent: each pass adds one. -/
+@[expose] def bump (e : Expr) : Expr := .lit (eval (fun _ => 0) e + 1)
 
 end Examples.ConstantFolding

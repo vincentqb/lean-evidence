@@ -10,16 +10,9 @@ changes instead.
 
 Write claims that cannot be gamed:
 
-- The headlines together must fail for every trivial implementation, as `fold_closed_literal`
-  fails for `fold := id` and `fold_preserves_meaning` for a constant fold.
-- A statement says what its name says. Never state `True`, restate the implementation as
-  its specification, or weaken a statement until it passes.
-- State world assumptions as `WorldClaim` hypotheses, not plain ones; one that cannot hold
-  makes every theorem using it vacuous.
-- A premise must be strictly smaller than the headline it supports; a claim that restates
-  the headline proves nothing.
-- Unproved claims stay `Conjecture`s however many `Test`s, `Check`s, or suites back them;
-  mark only suites that exercise their claim with `@[exercises]`.
+- A statement says what its name says; never restate the implementation as its
+  specification.
+- Mark only suites that exercise their claim with `@[exercises]`.
 - Keep effects in the shell and decisions in the core.
 
 When changing a check, add a fixture it rejects to `LeanEvidenceTests/`, and keep

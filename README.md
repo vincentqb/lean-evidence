@@ -26,27 +26,31 @@ says the shell prints the true value of an expression, assuming native addition 
 ```lean
 public meta import LeanEvidence
 
-/-- The runtime's native addition agrees with `Nat.add`. A different sum for any pair
-falsifies it. -/
-WorldClaim NativeAddAgrees := ∀ a b, nativeAdd a b = a + b
-Check NativeAddAgrees : nativeAdd (2 ^ 70) (2 ^ 70) = 2 ^ 71
-@[exercises NativeAddAgrees] def nativeAddSuite : IO Unit := ...
+/-- The adder agrees with `Nat.add`. A different sum for any pair falsifies it. -/
+WorldClaim AddAgrees (add : Nat → Nat → Nat) := ∀ a b, add a b = a + b
+Check AddAgrees nativeAdd : nativeAdd (2 ^ 70) (2 ^ 70) = 2 ^ 71
+@[exercises AddAgrees] def nativeAddSuite : IO Unit := ...
 
 Conjecture Normalizes (optimize : Expr → Expr) := ∀ e, normal (optimize e) = true
 Test Normalizes fold : normal (fold (.add (.add (.lit 1) (.lit 2)) (.var 0))) = true := by decide
 
-theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
+theorem output_correct (agrees : AddAgrees nativeAdd) (e : Expr) :
     Shell.output e = toString (eval (fun _ => 0) e)
+theorem output_correct_rejects_suffix :
+    ¬ (AddAgrees Nat.add → ∀ e : Expr,
+      (fun e => toString (eval (fun _ => 0) e) ++ "!") e = toString (eval (fun _ => 0) e))
 ```
 
 - `WorldClaim Name := P` names an assumption about the world; its doc comment names the
-  observation that would falsify it.
+  observation that would falsify it, and the foreign code it constrains is a parameter.
 - `Check Claim : instance` runs one instance of a claim during the build, foreign code included.
 - `@[exercises Claim]` marks a live suite that exercises a claim; the report names it.
 - `Conjecture Name := P` names a claim not yet proved; a theorem of type `Name` discharges it.
 - `Test Claim : instance := proof` proves one instance of a claim in the kernel.
 - A headline takes the claims it rests on as hypotheses; `lake build` reports it proved (●)
   once its conjectures are proved and derived (◕) until then.
+- A kill is `¬` a headline with its holes and boundary constants replaced by wrong ones; every
+  headline needs one in `comparator.json`.
 
 Claims live in spec modules, and every world assumption a headline uses needs a `Check`,
 suite, or `Test`.

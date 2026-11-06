@@ -29,7 +29,7 @@ theorem fold_preserves_meaning (env : Nat → Nat) (e : Expr) :
     eval env (fold e) = eval env e := by
   induction e <;> simp_all [fold, eval, eval_combine]
 
-theorem evalNative_eq (agrees : NativeAddAgrees) (env : Nat → Nat) (e : Expr) :
+theorem evalNative_eq (agrees : AddAgrees nativeAdd) (env : Nat → Nat) (e : Expr) :
     evalNative env e = eval env e := by
   induction e with
   | lit n => rfl

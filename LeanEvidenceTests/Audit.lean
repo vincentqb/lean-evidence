@@ -131,6 +131,21 @@ run_cmd Elab.Command.liftTermElabM do
   expect errors "CoreClaim" "declare claims in a spec module"
   if errors.any (fun e => contains e "ClockAdvances" || contains e "SuccAgrees") then
     throwError "Evidence did not count: {errors}"
+  let replaceable := NameSet.empty.insert `LeanEvidenceTests.Fixtures.identity
+  unless ← Audit.kills replaceable `LeanEvidenceTests.Fixtures.identity_fixed
+      `LeanEvidenceTests.Fixtures.identity_fixed_rejects_successor do
+    throwError "A kill was not recognised"
+  if ← Audit.kills replaceable `LeanEvidenceTests.Fixtures.identity_fixed
+      `LeanEvidenceTests.Fixtures.mismatched_negation then
+    throwError "A different statement counted as a kill"
+  let killed ← Audit.killsOf replaceable #[`LeanEvidenceTests.Fixtures.identity_fixed,
+    `LeanEvidenceTests.Fixtures.identity_fixed_rejects_successor, `LeanEvidenceTests.Fixtures.bounded]
+  unless killed.map (·.1) == #[`LeanEvidenceTests.Fixtures.identity_fixed,
+      `LeanEvidenceTests.Fixtures.bounded] do
+    throwError "A kill was reported as a headline: {killed.map (·.1)}"
+  expect (Audit.meaningful killed) "bounded" "no kill"
+  if (Audit.meaningful killed).any (contains · "identity_fixed") then
+    throwError "A killed headline was reported unkilled"
 
 end
 

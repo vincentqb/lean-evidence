@@ -148,6 +148,31 @@ def headline (name : Name) : MetaM Headline := do
         unnamed := unnamed.push (toString (← Meta.ppExpr statement))
     return { name, premises, unnamed }
 
+private def withReplaceableAsMVars (replaceable : NameSet) (type : Expr) : MetaM Expr := do
+  let mut pattern := type
+  for name in type.getUsedConstants.filter replaceable.contains do
+    let info ← getConstInfo name
+    let mvar ← Meta.mkFreshExprMVar (info.instantiateTypeLevelParams
+      (← info.levelParams.mapM fun _ => Meta.mkFreshLevelMVar))
+    pattern := pattern.replace fun e => if e.isConstOf name then some mvar else none
+  return pattern
+
+def kills (replaceable : NameSet) (headline kill : Name) : MetaM Bool := do
+  let some killInfo := (← getEnv).find? kill | return false
+  let .app (.const ``Not _) rejected := killInfo.type | return false
+  let some headlineInfo := (← getEnv).find? headline | return false
+  withoutModifyingState <| Meta.withReducible <|
+    Meta.isDefEq (← withReplaceableAsMVars replaceable headlineInfo.type) rejected
+
+def killsOf (replaceable : NameSet) (theorems : Array Name) : MetaM (Array (Name × Array Name)) := do
+  let found ← theorems.mapM fun headline => return (headline, ← theorems.filterM (kills replaceable headline))
+  let killers := found.flatMap (·.2)
+  return found.filter (!killers.contains ·.1)
+
+def meaningful (killed : Array (Name × Array Name)) : Array String :=
+  killed.filterMap fun (headline, found) =>
+    if found.isEmpty then some s!"{headline}: no kill shows it rejects a wrong implementation" else none
+
 private def runtimeCallees (env : Environment) (name : Name) : Array Name :=
   let body := ((env.find? name).bind (·.value? (allowOpaque := true))).map (·.getUsedConstants)
   body.getD #[] ++ (Compiler.getImplementedBy? env name).toArray
@@ -250,28 +275,32 @@ def run (project : Project) (args : List String) : IO Unit := do
   unless catalog.contains config.solution_module do
     throw <| .userError s!"solution_module {config.solution_module} is not built by a default target"
   let holes := config.definition_names.getD #[]
-  let (inventory, evidence, headlines, holeRoles, claimRoles, unreached) ←
+  let (inventory, evidence, headlines, killed, holeRoles, claimRoles, unreached) ←
     withEnvironment catalog <| Meta.MetaM.run' do
       let env ← getEnv
       let roleOf (name : Name) : MetaM (Name × Option Role) := do
         return (name, (← findModuleOf? name).bind project.role?)
       let reached := reachedFrom env catalog `main
-      return (← collect catalog, allEvidence env, ← config.theorem_names.mapM headline,
+      let inventory ← collect catalog
+      let boundary := inventory.declarations.filter (project.role? ·.moduleName == some .boundary)
+      let killed ← killsOf (NameSet.ofList (holes ++ boundary.map (·.name)).toList) config.theorem_names
+      return (inventory, allEvidence env, ← killed.mapM fun (name, _) => headline name, killed,
         ← holes.mapM roleOf, ← (registeredClaims env).mapM (roleOf ·.1),
         if env.contains `main then holes.filter (!reached.contains ·) else #[])
   let imports ← challengeImports config.challenge_module
   let failures :=
     (sound project inventory holeRoles unreached headlines).map ("sound: " ++ ·) ++
+    (meaningful killed).map ("meaningful: " ++ ·) ++
     (owned project config claimRoles imports (← challengeDeclarations config.challenge_module)).map
       ("owned: " ++ ·) ++
     (evidenced headlines evidence).map ("evidence: " ++ ·)
   unless project.check inventory && failures.isEmpty do
     throw <| IO.userError ("LeanEvidence audit failed:\n" ++ "\n".intercalate failures.toList)
   IO.println s!"Checked {inventory.modules.size} modules and {inventory.declarations.size} declarations"
-  for line in headlines do
-    let premises := "; ".intercalate (line.premises.map (describe evidence)).toList
-    IO.println (s!"{if proved line.premises then "●" else "◕"} {line.name}" ++
-      if premises.isEmpty then "" else s!"  ({premises})")
+  for (line, (_, found)) in headlines.zip killed do
+    let notes := line.premises.map (describe evidence) |>.push
+      s!"killed by {", ".intercalate (found.map toString).toList}"
+    IO.println s!"{if proved line.premises then "●" else "◕"} {line.name}  ({"; ".intercalate notes.toList})"
   IO.println s!"Owned: {" ".intercalate (← ownedFiles project inventory config.challenge_module).toList}"
 
 end LeanEvidence.Audit
