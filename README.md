@@ -42,7 +42,7 @@ theorem output_correct (agrees : NativeAddAgrees) (e : Expr) :
 - `WorldClaim Name := P` names an assumption about the world; its doc comment names the
   observation that would falsify it.
 - `Check Claim : instance` runs one instance of a claim during the build, foreign code included.
-- `@[exercises Claim]` marks a live suite in a shell module that exercises a claim.
+- `@[exercises Claim]` marks a live suite that exercises a claim; the report names it.
 - `Conjecture Name := P` names a claim not yet proved; a theorem of type `Name` discharges it.
 - `Test Claim : instance := proof` proves one instance of a claim in the kernel.
 - A headline takes the claims it rests on as hypotheses; `lake build` reports it proved (●)
@@ -76,7 +76,7 @@ public meta def main : List String → IO Unit := LeanEvidence.Audit.run {
 
 - `.spec` and `.core` code is pure: no `partial`, `unsafe`, `@[extern]`, `@[implemented_by]`,
   initializers, IO, or `dbg*`.
-- `.boundary` code is `@[extern]` declarations only.
+- `.boundary` code is `@[extern] opaque` declarations only.
 - `.shell` code may do IO but not `unsafe`, `@[extern]`, or `@[implemented_by]`.
 - `.tooling` covers `Claims` and scripts; like every role, it may use only standard axioms.
 - Non-`meta` imports run from tooling to shell to core to spec and boundary, never back;
@@ -84,10 +84,10 @@ public meta def main : List String → IO Unit := LeanEvidence.Audit.run {
 
 `Manifest.lean` imports only spec and boundary modules and declares each core or shell
 function a headline mentions as a hole with the code's exact type, `def name : T := sorry`;
-[`comparator.json`](comparator.json) lists the headlines and holes. Put `Claims` in a
-default target, and declare `Manifest` as a `lean_lib` that is not one. The audit imports
-every module of the default targets into one environment, so only one of them may define
-`main`.
+[`comparator.json`](comparator.json) lists exactly its headlines and holes, and `main` must
+reach every hole. Put `Claims` in a default target, and declare `Manifest` as a `lean_lib`
+that is not one, with `leanOptions := #[⟨`warn.sorry, false⟩]`. The audit imports every
+module of the default targets into one environment, so only one of them may define `main`.
 
 ## Run
 
@@ -100,7 +100,7 @@ lake comparator   # MyApp/Claims.lean proves exactly the statements in Manifest.
 The audit reruns and prints its report only when a module, `Audit.lean`, `comparator.json`, or
 `Manifest.lean` changes; `.lake/build/leanEvidence.txt` keeps the last report.
 
-Make the files you own read-only for agents, along with `lakefile.lean` and
-`lake-manifest.json`. `Check` on foreign code needs `precompileModules`. `lake comparator`
+The report's `Owned:` line lists the files that decide what is claimed: review their changes
+before you push. `Check` on foreign code needs `precompileModules`. `lake comparator`
 replays the headline proofs through the kernel in a separate process, which rejects proofs
 that skipped the kernel during the build.

@@ -20,29 +20,35 @@ lean_lib «Examples» where
   globs := #[.submodules `Examples.ConstantFolding]
   precompileModules := true
 
-lean_lib «LeanEvidenceManifest»
+lean_lib «LeanEvidenceManifest» where
+  leanOptions := #[⟨`warn.sorry, false⟩]
 
-@[test_driver]
 lean_lib «LeanEvidenceTests» where
   precompileModules := true
   leanOptions := #[⟨`linter.extra.unreachableTactic, false⟩]
+
+@[test_driver] script test do
+  let lake := (← getLake).toString
+  for args in [#["build"], #["lint"], #["build", "LeanEvidenceTests"], #["comparator"]] do
+    let code ← (← IO.Process.spawn { cmd := lake, args, cwd := (← getRootPackage).dir }).wait
+    unless code == 0 do return code
+  return 0
 
 package_facet leanEvidence pkg : Unit := do
   let some audit ← findModule? `LeanEvidence.Audit | error "LeanEvidence.Audit is unavailable"
   let config ← IO.ofExcept <| Json.parse (← IO.FS.readFile (pkg.dir / "comparator.json"))
   let challenge ← IO.ofExcept <| config.getObjValAs? String "challenge_module"
+  let some manifest ← findModule? challenge.toName | error s!"{challenge} is unavailable"
   let mut catalog : Array Name := #[]
-  let mut job := Job.nil.mix (← audit.leanArts.fetch)
+  let mut job := (Job.nil.mix (← audit.leanArts.fetch)).mix (← manifest.leanArts.fetch)
   for root in ← (← pkg.defaultModules.fetch).await do
     for mod in (← (← root.transImports.fetch).await).push root do
       unless mod.pkg.keyName != pkg.keyName || catalog.contains mod.name do
         catalog := catalog.push mod.name
         job := job.mix (← mod.leanArts.fetch)
   job.mapM fun _ => do
-    for file in [pkg.dir / "Audit.lean", pkg.dir / "comparator.json",
-        modToFilePath pkg.dir challenge.toName "lean"] do
+    for file in [pkg.dir / "Audit.lean", pkg.dir / "comparator.json"] do
       addTrace (← BuildTrace.compute (TextFilePath.mk file))
-    -- Rerun only when an input changes, and print the report only when rerun.
     let report := pkg.buildDir / "leanEvidence.txt"
     let upToDate ← buildUnlessUpToDate? report (← getTrace) (report.addExtension "trace") do
       IO.FS.writeFile report (← captureProc {

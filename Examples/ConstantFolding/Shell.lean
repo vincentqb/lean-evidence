@@ -17,3 +17,5 @@ def run (e : Expr) : IO Unit := IO.println (output e)
       unless nativeAdd a b - a == b do throw (IO.userError s!"nativeAdd {a} {b} disagrees")
 
 end Examples.ConstantFolding.Shell
+
+def main : IO Unit := Examples.ConstantFolding.Shell.run (.add (.lit 2) (.lit 3))

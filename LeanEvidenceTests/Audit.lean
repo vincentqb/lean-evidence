@@ -35,13 +35,22 @@ private def expect (errors : Array String) (name reason : String) : CoreM Unit :
   unless errors.any (fun error => contains error name && contains error reason) do
     throwError "Missing rejection of {name}: {reason}\n{errors}"
 
+private def violations (project : Project) (inventory : Inventory) : Array String :=
+  Audit.sound project inventory #[] #[] #[]
+
+private def config : Audit.Config := {
+  challenge_module := `LeanEvidenceTests.Fixtures.Challenge
+  solution_module := `LeanEvidenceTests.Fixtures.Core
+  theorem_names := #[`A]
+  definition_names := some #[`h] }
+
 #guard ({ layers := #[(`A, .tooling), (`A.B.C, .core), (`A.B, .spec)] } : Project).role?
   `A.B.C.D == some .core
 
 run_cmd Elab.Command.liftCoreM do
   let accepted ← Audit.collect valid
   unless project.check accepted do
-    throwError "Valid fixtures were rejected:\n{Audit.violations project accepted}"
+    throwError "Valid fixtures were rejected:\n{violations project accepted}"
   let reassign (module : Name) (role : Role) : Project :=
     { layers := project.layers.map fun (name, r) => (name, if name == module then role else r) }
   let rejected ← Audit.collect (valid.push `LeanEvidenceTests.Fixtures.Rejected)
@@ -53,7 +62,7 @@ run_cmd Elab.Command.liftCoreM do
         ("traced", "dbg builtin"), ("traceValue", "dbg builtin"), ("Rejected.raw", "axioms"),
         ("chained", "Rejected.raw"), ("Rejected.hole", "sorryAx"),
         ("Fixtures.Rejected", "may not import")] do
-      expect (Audit.violations layout rejected) name reason
+      expect (violations layout rejected) name reason
   for (module, role, facts, name, reason) in #[
       (`LeanEvidenceTests.Fixtures.Core, Role.boundary, accepted, "identity",
         "not an @[extern] binding"),
@@ -64,19 +73,34 @@ run_cmd Elab.Command.liftCoreM do
       (`LeanEvidenceTests.Fixtures.Rejected, .shell, rejected, "bound", "@[extern]"),
       (`LeanEvidenceTests.Fixtures.Rejected, .shell, rejected, "Rejected.replaced",
         "@[implemented_by]"),
-      (`LeanEvidenceTests.Fixtures.Rejected, .tooling, rejected, "Rejected.raw", "axioms")] do
-    expect (Audit.violations (reassign module role) facts) name reason
+      (`LeanEvidenceTests.Fixtures.Rejected, .tooling, rejected, "Rejected.raw", "axioms"),
+      (`LeanEvidenceTests.Fixtures.Rejected, .boundary, rejected, "bound",
+        "@[extern] with a body the kernel unfolds")] do
+    expect (violations (reassign module role) facts) name reason
   let legacy := { accepted with
     modules := accepted.modules.map ({ · with usesModuleSystem := false }) }
   if project.check legacy then throwError "A file without `module` passed"
-  expect (Audit.violations project legacy) "Fixtures.Core" "start the file with `module`"
+  expect (violations project legacy) "Fixtures.Core" "start the file with `module`"
   let unlisted : Project :=
     { layers := project.layers.filter (·.1 != `LeanEvidenceTests.Fixtures.Shell) }
   if unlisted.check accepted then throwError "An unclassified module passed"
-  expect (Audit.violations unlisted accepted) "Fixtures.Shell" "Unclassified"
-  let challenge ← Audit.challengeImports project `LeanEvidenceTests.Fixtures.Challenge
+  expect (violations unlisted accepted) "Fixtures.Shell" "Unclassified"
+  let challenge := Audit.owned project config #[]
+    (← Audit.challengeImports `LeanEvidenceTests.Fixtures.Challenge) #[(`A, true)]
   expect challenge "Fixtures.Core" "may import only spec and boundary"
   expect challenge "imports LeanEvidence;" "may import only spec and boundary"
+  let listing := Audit.owned project config #[] #[] #[(`A, true), (`B, true), (`g, false)]
+  expect listing "declares B" "theorem_names omits"
+  expect listing "declares g" "definition_names omits"
+  expect listing "lists h" "does not declare"
+  let reached := Audit.reachedFrom (← getEnv) (valid.push `LeanEvidenceTests.Fixtures.Rejected)
+  unless (reached `LeanEvidenceTests.Fixtures.identity).toList.any
+      (privateToUserName · == `LeanEvidenceTests.Fixtures.helper) &&
+      !(reached `LeanEvidenceTests.Fixtures.identity).contains `LeanEvidenceTests.Fixtures.successor &&
+      (reached `LeanEvidenceTests.Fixtures.Rejected.replaced).contains
+        `LeanEvidenceTests.Fixtures.Rejected.fast do
+    throwError "Runtime reachability misread a call"
+  expect (Audit.sound project ⟨#[], #[]⟩ #[] #[`h] #[]) "h" "main never reaches"
 
 run_cmd Elab.Command.liftTermElabM do
   let world ← Audit.headline `LeanEvidenceTests.Fixtures.successor_grows
@@ -96,8 +120,11 @@ run_cmd Elab.Command.liftTermElabM do
   let headlines ← #[`LeanEvidenceTests.Fixtures.uses_unchecked,
     `LeanEvidenceTests.Fixtures.uses_live, `LeanEvidenceTests.Fixtures.uses_unnamed].mapM
     fun name => Audit.headline name
-  let errors ← Audit.headlineViolations project #[`LeanEvidenceTests.Fixtures.EvenFour]
-    (headlines.push world) (allEvidence (← getEnv))
+  let claims ← (registeredClaims (← getEnv)).mapM fun (claim, _) => do
+    return (claim, (← findModuleOf? claim).bind project.role?)
+  let errors := Audit.sound project ⟨#[], #[]⟩ #[(`LeanEvidenceTests.Fixtures.EvenFour, some .spec)]
+      #[] (headlines.push world) ++ Audit.owned project config claims #[] #[(`A, true), (`h, false)] ++
+    Audit.evidenced (headlines.push world) (allEvidence (← getEnv))
   expect errors "Unchecked" "no Test, Check, or live suite"
   expect errors "EvenFour" "core or shell definition"
   expect errors "uses_unnamed" "not a WorldClaim or Conjecture"

@@ -41,6 +41,7 @@ structure DeclarationFact where
   isUnsafe : Bool
   isPartial : Bool
   external : Bool
+  unfoldable : Bool
   replaced : Bool
   initializes : Bool
   effects : Bool
@@ -96,7 +97,9 @@ def proved (premises : Array Premise) : Bool :=
   (if fact.axioms.isEmpty then [] else [s!"axioms {fact.axioms}"]) ++
     if !fact.computational then [] else match role with
       | .spec | .core => raised []
-      | .boundary => if fact.external then [] else ["not an @[extern] binding"]
+      | .boundary =>
+        if !fact.external then ["not an @[extern] binding"]
+        else if fact.unfoldable then ["@[extern] with a body the kernel unfolds"] else []
       | .shell => raised ["partial", "initializer", "IO", "dbg builtin"]
       | .tooling => []
 

@@ -17,6 +17,7 @@ inductive EvidenceKind where
 structure Evidence where
   claim : Name
   kind : EvidenceKind
+  source : Name := .anonymous
 
 initialize claimsExt : SimplePersistentEnvExtension (Name × ClaimKind) (Array (Name × ClaimKind)) ←
   registerSimplePersistentEnvExtension { addEntryFn := Array.push, addImportedFn := Array.flatten }
@@ -92,13 +93,13 @@ syntax (name := exercises) "exercises " ident : attr
 initialize registerBuiltinAttribute {
   name := `exercises
   descr := "Marks a live suite as evidence for a claim it exercises at run time."
-  add := fun _ stx kind => do
+  add := fun suite stx kind => do
     unless kind == .global do throwError "exercises must be a global attribute"
     let `(attr| exercises $claim:ident) := stx | throwUnsupportedSyntax
     let name ← realizeGlobalConstNoOverloadWithInfo claim
     unless (claimKind? (← getEnv) name).isSome do
       throwError "{name} is not a WorldClaim or Conjecture"
-    modifyEnv (evidenceExt.addEntry · { claim := name, kind := .suite })
+    modifyEnv (evidenceExt.addEntry · { claim := name, kind := .suite, source := suite })
 }
 
 end LeanEvidence

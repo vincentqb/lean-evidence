@@ -22,6 +22,5 @@ Write claims that cannot be gamed:
   mark only suites that exercise their claim with `@[exercises]`.
 - Keep effects in the shell and decisions in the core.
 
-When changing a check, update `LeanEvidenceTests/` and keep `layering_sound` in
-`LeanEvidence/Policy.lean` proved. Validate with `lake build`, `lake lint`, `lake test`, and
-`lake comparator`.
+When changing a check, add a fixture it rejects to `LeanEvidenceTests/`, and keep
+`layering_sound` in `LeanEvidence/Policy.lean` proved. Validate with `lake test`.
