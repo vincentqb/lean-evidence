@@ -36,7 +36,7 @@ private def expect (errors : Array String) (name reason : String) : CoreM Unit :
     throwError "Missing rejection of {name}: {reason}\n{errors}"
 
 private def violations (project : Project) (inventory : Inventory) : Array String :=
-  Audit.sound project inventory #[] #[] #[]
+  Audit.sound project inventory #[] none #[]
 
 private def config : Audit.Config := {
   challenge_module := `LeanEvidenceTests.Fixtures.Challenge
@@ -86,49 +86,58 @@ run_cmd Elab.Command.liftCoreM do
   if unlisted.check accepted then throwError "An unclassified module passed"
   expect (violations unlisted accepted) "Fixtures.Shell" "Unclassified"
   let challenge := Audit.owned project config #[]
-    (← Audit.challengeImports `LeanEvidenceTests.Fixtures.Challenge) #[(`A, true)]
+    (← Audit.challengeImports `LeanEvidenceTests.Fixtures.Challenge) #[`A] #[`h]
   expect challenge "Fixtures.Core" "may import only spec and boundary"
   expect challenge "imports LeanEvidence;" "may import only spec and boundary"
-  let listing := Audit.owned project config #[] #[] #[(`A, true), (`B, true), (`g, false)]
+  let listing := Audit.owned project config #[] #[] #[`A, `B] #[`g]
   expect listing "declares B" "theorem_names omits"
   expect listing "declares g" "definition_names omits"
   expect listing "lists h" "does not declare"
-  let reached := Audit.reachedFrom (← getEnv) (valid.push `LeanEvidenceTests.Fixtures.Rejected)
+  let env ← getEnv
+  let reached := Audit.reachedFrom env fun name =>
+    (env.getModuleIdxFor? name).any (valid.contains env.header.modules[·.toNat]!.module)
   unless (reached `LeanEvidenceTests.Fixtures.identity).toList.any
       (privateToUserName · == `LeanEvidenceTests.Fixtures.helper) &&
       !(reached `LeanEvidenceTests.Fixtures.identity).contains `LeanEvidenceTests.Fixtures.successor &&
-      (reached `LeanEvidenceTests.Fixtures.Rejected.replaced).contains
-        `LeanEvidenceTests.Fixtures.Rejected.fast do
+      (reached `LeanEvidenceTests.Fixtures.loopIdentity).contains `LeanEvidenceTests.Fixtures.identity do
     throwError "Runtime reachability misread a call"
-  expect (Audit.sound project ⟨#[], #[]⟩ #[] #[`h] #[]) "h" "main never reaches"
+  expect (Audit.sound project ⟨#[], #[]⟩ #[] (some (some .shell, #[`h])) #[]) "h" "main never reaches"
+  expect (Audit.sound project ⟨#[], #[]⟩ #[] (some (some .tooling, #[])) #[]) "main" "shell module"
+  let registrations := (valid.push `LeanEvidenceTests.Fixtures.Rejected).flatMap fun module =>
+    (PersistentEnvExtension.getModuleEntries claimsExt env (env.getModuleIdx? module).get!).map
+      fun (claim, _) => (claim, project.role? module, (env.getModuleIdxFor? claim).any
+        (env.header.modules[·.toNat]!.module == module))
+  let registered := Audit.owned project config registrations #[] #[`A] #[`h]
+  expect registered "CoreClaim" "declare claims in a spec module"
+  expect registered "Identity" "registered outside the module that declares it"
 
 run_cmd Elab.Command.liftTermElabM do
-  let world ← Audit.headline `LeanEvidenceTests.Fixtures.successor_grows
-  let open_ ← Audit.headline `LeanEvidenceTests.Fixtures.uses_open
-  let discharged ← Audit.headline `LeanEvidenceTests.Fixtures.uses_discharged
-  let precondition ← Audit.headline `LeanEvidenceTests.Fixtures.bounded
+  let listed := #[`LeanEvidenceTests.Fixtures.even_four]
+  let world ← Audit.headline listed `LeanEvidenceTests.Fixtures.successor_grows
+  let open_ ← Audit.headline listed `LeanEvidenceTests.Fixtures.uses_open
+  let discharged ← Audit.headline listed `LeanEvidenceTests.Fixtures.uses_discharged
+  let unlistedProof ← Audit.headline #[] `LeanEvidenceTests.Fixtures.uses_discharged
+  let precondition ← Audit.headline listed `LeanEvidenceTests.Fixtures.bounded
   unless world.premises.map (·.claim) == #[`LeanEvidenceTests.Fixtures.SuccAgrees] &&
       proved world.premises do
     throwError "A world premise was misread"
   if proved open_.premises then throwError "An open conjecture was reported proved"
   unless proved discharged.premises && discharged.premises.all (·.discharged) do
     throwError "A proved conjecture was not recognised"
+  if proved unlistedProof.premises then
+    throwError "A conjecture counted as proved by a theorem comparator.json does not list"
   unless precondition.premises.isEmpty && precondition.unnamed.isEmpty do
     throwError "A precondition was read as an assumption"
-  let missing ← try discard <| Audit.headline `LeanEvidenceTests.Missing; pure false catch _ => pure true
+  let missing ← try discard <| Audit.headline listed `LeanEvidenceTests.Missing; pure false catch _ => pure true
   unless missing do throwError "A missing headline passed"
   let headlines ← #[`LeanEvidenceTests.Fixtures.uses_unchecked,
     `LeanEvidenceTests.Fixtures.uses_live, `LeanEvidenceTests.Fixtures.uses_unnamed].mapM
-    fun name => Audit.headline name
-  let claims ← (registeredClaims (← getEnv)).mapM fun (claim, _) => do
-    return (claim, (← findModuleOf? claim).bind project.role?)
+    fun name => Audit.headline listed name
   let errors := Audit.sound project ⟨#[], #[]⟩ #[(`LeanEvidenceTests.Fixtures.EvenFour, some .spec)]
-      #[] (headlines.push world) ++ Audit.owned project config claims #[] #[(`A, true), (`h, false)] ++
-    Audit.evidenced (headlines.push world) (allEvidence (← getEnv))
+      none (headlines.push world) ++ Audit.evidenced (headlines.push world) (allEvidence (← getEnv))
   expect errors "Unchecked" "no Test, Check, or live suite"
   expect errors "EvenFour" "core or shell definition"
   expect errors "uses_unnamed" "not a WorldClaim or Conjecture"
-  expect errors "CoreClaim" "declare claims in a spec module"
   if errors.any (fun e => contains e "ClockAdvances" || contains e "SuccAgrees") then
     throwError "Evidence did not count: {errors}"
   let replaceable := NameSet.empty.insert `LeanEvidenceTests.Fixtures.identity
@@ -138,6 +147,9 @@ run_cmd Elab.Command.liftTermElabM do
   if ← Audit.kills replaceable `LeanEvidenceTests.Fixtures.identity_fixed
       `LeanEvidenceTests.Fixtures.mismatched_negation then
     throwError "A different statement counted as a kill"
+  unless ← Audit.kills replaceable `LeanEvidenceTests.Fixtures.identity_three
+      `LeanEvidenceTests.Fixtures.identity_three_rejects_successor do
+    throwError "A kill of a headline about a concrete argument was not recognised"
   let killed ← Audit.killsOf replaceable #[`LeanEvidenceTests.Fixtures.identity_fixed,
     `LeanEvidenceTests.Fixtures.identity_fixed_rejects_successor, `LeanEvidenceTests.Fixtures.bounded]
   unless killed.map (·.1) == #[`LeanEvidenceTests.Fixtures.identity_fixed,

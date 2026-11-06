@@ -51,6 +51,10 @@ theorem mismatched_negation : ¬ ∀ n : Nat, n = n + 1 := by
   intro h
   exact absurd (h 0) (by decide)
 
+theorem identity_three : identity 3 = 3 := by simp [identity, helper]
+
+theorem identity_three_rejects_successor : ¬ (fun n : Nat => n + 1) 3 = 3 := by decide
+
 theorem uses_unnamed (h : 1 = 2) : 1 = 2 := h
 
 Conjecture CoreClaim := 1 = 1

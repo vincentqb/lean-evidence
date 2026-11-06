@@ -1,6 +1,7 @@
 module
 
 public import LeanEvidenceTests.Fixtures.Shell
+meta import LeanEvidence.Commands
 
 public section
 
@@ -38,5 +39,8 @@ private theorem viaRaw : False := raw
 private theorem chained : 1 = 2 := viaRaw.elim
 
 theorem hole : Identity identity := by sorry
+
+run_cmd Lean.modifyEnv (LeanEvidence.claimsExt.addEntry ·
+  (`LeanEvidenceTests.Fixtures.Identity, LeanEvidence.ClaimKind.world))
 
 end LeanEvidenceTests.Fixtures.Rejected

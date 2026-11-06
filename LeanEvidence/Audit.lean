@@ -9,6 +9,17 @@ open Lean
 
 namespace LeanEvidence.Audit
 
+private def closure (next : Name → Array Name) (roots : Array Name) : NameSet := Id.run do
+  let mut pending := roots
+  let mut seen : NameSet := {}
+  while !pending.isEmpty do
+    let name := pending.back!
+    pending := pending.pop
+    if seen.contains name then continue
+    seen := seen.insert name
+    pending := pending ++ next name
+  return seen
+
 private def terminates (env : Environment) (name : Name) : Bool :=
   (Elab.Structural.eqnInfoExt.find? env name).isSome || (Elab.WF.eqnInfoExt.find? env name).isSome
 
@@ -24,33 +35,11 @@ private def meaningDependencies (env : Environment) (name : Name) : Array Name :
   | some info => ((info.value? (allowOpaque := true)).map (·.getUsedConstants)).getD #[]
   | none => #[]
 
-private def dependentsFrom (env : Environment) (roots : Array Name) :
-    Std.HashMap Name (Array Name) := Id.run do
-  let mut pending := roots
-  let mut seen : NameSet := {}
-  let mut dependents : Std.HashMap Name (Array Name) := {}
-  while !pending.isEmpty do
-    let name := pending.back!
-    pending := pending.pop
-    if seen.contains name then continue
-    seen := seen.insert name
-    let dependencies := meaningDependencies env name
-    for dependency in dependencies do
-      dependents := dependents.insert dependency ((dependents.getD dependency #[]).push name)
-    pending := pending ++ dependencies
-  return dependents
-
-private def transitiveDependents (dependents : Std.HashMap Name (Array Name)) (target : Name) :
-    NameSet := Id.run do
-  let mut pending := #[target]
-  let mut reached : NameSet := {}
-  while !pending.isEmpty do
-    let name := pending.back!
-    pending := pending.pop
-    if reached.contains name then continue
-    reached := reached.insert name
-    pending := pending ++ dependents.getD name #[]
-  return reached
+private def dependingOn (env : Environment) (roots : Array Name) (target : Name) : NameSet :=
+  let dependents := (closure (meaningDependencies env) roots).foldl (init := {})
+    fun (map : Std.HashMap Name (Array Name)) name => (meaningDependencies env name).foldl
+      (fun map dependency => map.insert dependency ((map.getD dependency #[]).push name)) map
+  closure (dependents.getD · #[]) #[target]
 
 private def recordedInOlean (name : Name) : Bool := !isPrivateName name
 
@@ -100,7 +89,7 @@ def collect (catalog : Array Name) : CoreM Inventory := do
     let some idx := env.getModuleIdx? name | throwError "Compiled module {name} is unavailable"
     return (name, env.header.moduleData[idx.toNat]!)
   let types := modules.flatMap fun (_, data) => data.constants.flatMap (·.type.getUsedConstants)
-  let reachesIO := transitiveDependents (dependentsFrom env types) ``IO.RealWorld
+  let reachesIO := dependingOn env types ``IO.RealWorld
   let declarations ← StateRefT'.run' (s := {}) <| modules.flatMapM fun (name, data) =>
     data.constants.mapM fun info => declaration reachesIO info name
   return {
@@ -122,28 +111,26 @@ structure Config where
   definition_names : Option (Array Name)
   deriving FromJson
 
+def Config.holes (config : Config) : Array Name := config.definition_names.getD #[]
+
 structure Headline where
   name : Name
   premises : Array Premise
   unnamed : Array String
 
-private def discharged (statement : Expr) : CoreM Bool := do
-  if statement.hasFVar || statement.hasMVar then return false
-  for (_, info) in (← getEnv).constants.toList do
-    if info.isTheorem && info.type == statement then
-      if (← nonstandardAxioms info.name).isEmpty then return true
-  return false
-
-def headline (name : Name) : MetaM Headline := do
-  let some info := (← getEnv).find? name | throwError "Headline {name} is not compiled"
+def headline (listed : Array Name) (name : Name) : MetaM Headline := do
+  let env ← getEnv
+  let some info := env.find? name | throwError "Headline {name} is not compiled"
+  let provedByListed := fun (statement : Expr) => !statement.hasFVar && !statement.hasMVar &&
+    listed.any fun theorem_ => (env.find? theorem_).any (·.type == statement)
   Meta.forallTelescope info.type fun binders _ => do
     let mut premises := #[]
     let mut unnamed := #[]
     for binder in binders do
       let statement ← Meta.inferType binder
       let claim := statement.getAppFn.constName
-      if let some kind := claimKind? (← getEnv) claim then
-        premises := premises.push { claim, kind, discharged := ← discharged statement }
+      if let some kind := claimKind? env claim then
+        premises := premises.push { claim, kind, discharged := provedByListed statement }
       else if !statement.hasFVar && (← Meta.isProp statement) then
         unnamed := unnamed.push (toString (← Meta.ppExpr statement))
     return { name, premises, unnamed }
@@ -161,7 +148,8 @@ def kills (replaceable : NameSet) (headline kill : Name) : MetaM Bool := do
   let some killInfo := (← getEnv).find? kill | return false
   let .app (.const ``Not _) rejected := killInfo.type | return false
   let some headlineInfo := (← getEnv).find? headline | return false
-  withoutModifyingState <| Meta.withReducible <|
+  withoutModifyingState <| Meta.withReducible <| Meta.withConfig (fun config => { config with
+      foApprox := true, ctxApprox := true, quasiPatternApprox := true, constApprox := true }) <|
     Meta.isDefEq (← withReplaceableAsMVars replaceable headlineInfo.type) rejected
 
 def killsOf (replaceable : NameSet) (theorems : Array Name) : MetaM (Array (Name × Array Name)) := do
@@ -173,25 +161,15 @@ def meaningful (killed : Array (Name × Array Name)) : Array String :=
   killed.filterMap fun (headline, found) =>
     if found.isEmpty then some s!"{headline}: no kill shows it rejects a wrong implementation" else none
 
-private def runtimeCallees (env : Environment) (name : Name) : Array Name :=
-  let body := ((env.find? name).bind (·.value? (allowOpaque := true))).map (·.getUsedConstants)
-  body.getD #[] ++ (Compiler.getImplementedBy? env name).toArray
+private def compiledCallees (env : Environment) (name : Name) : Array Name :=
+  let compiled := (env.find? (Compiler.mkUnsafeRecName name)).orElse fun _ => env.find? name
+  ((compiled.bind (·.value? (allowOpaque := true))).map (·.getUsedConstants)).getD #[]
 
-def reachedFrom (env : Environment) (catalog : Array Name) (root : Name) : NameSet := Id.run do
-  let inCatalog := fun name =>
-    (env.getModuleIdxFor? name).any fun idx => catalog.contains env.header.modules[idx.toNat]!.module
-  let mut pending := #[root]
-  let mut seen : NameSet := {}
-  while !pending.isEmpty do
-    let name := pending.back!
-    pending := pending.pop
-    if seen.contains name || !inCatalog name then continue
-    seen := seen.insert name
-    pending := pending ++ runtimeCallees env name
-  return seen
+def reachedFrom (env : Environment) (running : Name → Bool) (root : Name) : NameSet :=
+  closure (fun name => (compiledCallees env name).filter running) #[root]
 
 def sound (project : Project) (inventory : Inventory) (holes : Array (Name × Option Role))
-    (unreached : Array Name) (headlines : Array Headline) : Array String := Id.run do
+    (entry : Option (Option Role × Array Name)) (headlines : Array Headline) : Array String := Id.run do
   let mut errors := #[]
   for fact in inventory.modules do
     let some role := project.role? fact.name
@@ -208,32 +186,32 @@ def sound (project : Project) (inventory : Inventory) (holes : Array (Name × Op
   for (hole, role) in holes do
     unless role matches some .core | some .shell do
       errors := errors.push s!"{hole}: a definition hole must be a core or shell definition"
-  for hole in unreached do
-    errors := errors.push s!"{hole}: main never reaches this hole"
+  if let some (role, unreached) := entry then
+    unless role matches some .shell do errors := errors.push "main: declare it in a shell module"
+    for hole in unreached do errors := errors.push s!"{hole}: main never reaches this hole"
   for line in headlines do
     for hypothesis in line.unnamed do
       errors := errors.push s!"{line.name}: hypothesis {hypothesis} is not a WorldClaim or Conjecture"
   return errors
 
-def owned (project : Project) (config : Config) (claims : Array (Name × Option Role))
-    (challengeImports : Array Name) (declared : Array (Name × Bool)) : Array String := Id.run do
+def owned (project : Project) (config : Config) (registrations : Array (Name × Option Role × Bool))
+    (challengeImports : Array Name) (theorems holes : Array Name) : Array String := Id.run do
   let mut errors := #[]
-  for (claim, role) in claims do
+  for (claim, role, declaredThere) in registrations do
     if role.isSome && role != some .spec then
       errors := errors.push s!"{claim}: declare claims in a spec module"
+    unless declaredThere do
+      errors := errors.push s!"{claim}: registered outside the module that declares it"
   for dependency in challengeImports do
     unless project.admits .spec { name := dependency, comptime := false } do
       errors := errors.push s!"{config.challenge_module} imports {dependency}; \
         a challenge may import only spec and boundary modules and trusted roots"
-  let holes := config.definition_names.getD #[]
-  for (name, isTheorem) in declared do
-    let (field, listed) := if isTheorem then ("theorem_names", config.theorem_names)
-      else ("definition_names", holes)
-    unless listed.contains name do
+  for (field, declared, listed) in
+      #[("theorem_names", theorems, config.theorem_names), ("definition_names", holes, config.holes)] do
+    for name in declared.filter (!listed.contains ·) do
       errors := errors.push s!"{config.challenge_module} declares {name}, which comparator.json {field} omits"
-  for name in config.theorem_names ++ holes do
-    unless declared.any (·.1 == name) do
-      errors := errors.push s!"comparator.json lists {name}, which {config.challenge_module} does not declare"
+    for name in listed.filter (!declared.contains ·) do
+      errors := errors.push s!"comparator.json {field} lists {name}, which {config.challenge_module} does not declare"
   return errors
 
 def evidenced (headlines : Array Headline) (evidence : Array Evidence) : Array String :=
@@ -247,19 +225,25 @@ def challengeImports (challenge : Name) : IO (Array Name) := do
     (modToFilePath "." challenge "lean")
   return (← parseImports' (← IO.FS.readFile path) path.toString).imports.map (·.module)
 
-def challengeDeclarations (challenge : Name) : IO (Array (Name × Bool)) := do
+def challengeDeclarations (challenge : Name) : IO (Array Name × Array Name) := do
   let file ← findOLean challenge
-  let parts ← readModuleDataParts #[file, file.addExtension "server", file.addExtension "private"]
-  let some (data, _) := parts.back? | throw <| .userError s!"{challenge} is not compiled"
-  return (data.constants.filter (!·.name.isInternal)).map fun info => (info.name, info.isTheorem)
+  let parts ← #[file, file.addExtension "server", file.addExtension "private"].filterM (·.pathExists)
+  let some (data, _) := (← readModuleDataParts parts).back?
+    | throw <| .userError s!"{challenge} is not compiled"
+  let declared := data.constants.filter (!·.name.isInternal)
+  let usesSorry := fun (info : ConstantInfo) =>
+    (info.value?.map (·.getUsedConstants.contains ``sorryAx)).getD false
+  return ((declared.filter (·.isTheorem)).map (·.name),
+    (declared.filter fun info => !info.isTheorem && usesSorry info).map (·.name))
 
 private def sourceFile (module : Name) : String :=
   "/".intercalate (module.components.map toString) ++ ".lean"
 
-def ownedFiles (project : Project) (inventory : Inventory) (challenge : Name) : IO (Array String) :=
+def ownedFiles (project : Project) (inventory : Inventory) (challenge : Name) : IO (Array String) := do
+  let configuration ← #["comparator.json", "Audit.lean", "lakefile.lean", "lake-manifest.json",
+    "lean-toolchain"].filterM fun (file : String) => System.FilePath.pathExists file
   let claimModules := inventory.modules.filter (project.role? ·.name matches some .spec | some .boundary)
-  (#["comparator.json", "Audit.lean", "lakefile.lean", "lake-manifest.json", "lean-toolchain",
-    sourceFile challenge] ++ claimModules.map (sourceFile ·.name)).filterM (System.FilePath.pathExists ·)
+  return configuration ++ #[sourceFile challenge] ++ claimModules.map (sourceFile ·.name)
 
 private def describe (evidence : Array Evidence) (premise : Premise) : String :=
   let found := evidence.filter (·.claim == premise.claim)
@@ -274,25 +258,32 @@ def run (project : Project) (args : List String) : IO Unit := do
   let catalog := args.toArray.map String.toName
   unless catalog.contains config.solution_module do
     throw <| .userError s!"solution_module {config.solution_module} is not built by a default target"
-  let holes := config.definition_names.getD #[]
-  let (inventory, evidence, headlines, killed, holeRoles, claimRoles, unreached) ←
+  let (inventory, evidence, headlines, killed, holeRoles, registrations, entry) ←
     withEnvironment catalog <| Meta.MetaM.run' do
       let env ← getEnv
-      let roleOf (name : Name) : MetaM (Name × Option Role) := do
-        return (name, (← findModuleOf? name).bind project.role?)
-      let reached := reachedFrom env catalog `main
+      let moduleOf := fun (name : Name) =>
+        (env.getModuleIdxFor? name).map (env.header.modules[·.toNat]!.module)
+      let roleOf := fun (name : Name) => (moduleOf name).bind project.role?
       let inventory ← collect catalog
       let boundary := inventory.declarations.filter (project.role? ·.moduleName == some .boundary)
-      let killed ← killsOf (NameSet.ofList (holes ++ boundary.map (·.name)).toList) config.theorem_names
-      return (inventory, allEvidence env, ← killed.mapM fun (name, _) => headline name, killed,
-        ← holes.mapM roleOf, ← (registeredClaims env).mapM (roleOf ·.1),
-        if env.contains `main then holes.filter (!reached.contains ·) else #[])
+      let killed ← killsOf (NameSet.ofList (config.holes ++ boundary.map (·.name)).toList)
+        config.theorem_names
+      let registrations := catalog.flatMap fun module =>
+        (PersistentEnvExtension.getModuleEntries claimsExt env (env.getModuleIdx? module).get!).map
+          fun (claim, _) => (claim, project.role? module, moduleOf claim == some module)
+      let running := fun name => (moduleOf name).any fun module =>
+        catalog.contains module && project.role? module != some .tooling
+      let reached := reachedFrom env running `main
+      return (inventory, allEvidence env, ← killed.mapM (headline config.theorem_names ·.1), killed,
+        config.holes.map fun hole => (hole, roleOf hole), registrations,
+        if env.contains `main then some (roleOf `main, config.holes.filter (!reached.contains ·))
+        else none)
   let imports ← challengeImports config.challenge_module
+  let (theorems, holes) ← challengeDeclarations config.challenge_module
   let failures :=
-    (sound project inventory holeRoles unreached headlines).map ("sound: " ++ ·) ++
+    (sound project inventory holeRoles entry headlines).map ("sound: " ++ ·) ++
     (meaningful killed).map ("meaningful: " ++ ·) ++
-    (owned project config claimRoles imports (← challengeDeclarations config.challenge_module)).map
-      ("owned: " ++ ·) ++
+    (owned project config registrations imports theorems holes).map ("owned: " ++ ·) ++
     (evidenced headlines evidence).map ("evidence: " ++ ·)
   unless project.check inventory && failures.isEmpty do
     throw <| IO.userError ("LeanEvidence audit failed:\n" ++ "\n".intercalate failures.toList)
