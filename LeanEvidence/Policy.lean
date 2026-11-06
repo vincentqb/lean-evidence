@@ -65,10 +65,10 @@ inductive ClaimKind where
 structure Premise where
   claim : Name
   kind : ClaimKind
-  discharged : Bool
+  dischargedBy : Option Name
 
 def proved (premises : Array Premise) : Bool :=
-  premises.all fun premise => premise.kind == .world || premise.discharged
+  premises.all fun premise => premise.kind == .world || premise.dischargedBy.isSome
 
 @[expose] def Role.permits : Role → Role → Bool
   | .tooling, _ => true

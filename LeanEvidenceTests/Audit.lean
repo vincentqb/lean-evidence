@@ -122,7 +122,8 @@ run_cmd Elab.Command.liftTermElabM do
       proved world.premises do
     throwError "A world premise was misread"
   if proved open_.premises then throwError "An open conjecture was reported proved"
-  unless proved discharged.premises && discharged.premises.all (·.discharged) do
+  unless proved discharged.premises &&
+      discharged.premises.all (·.dischargedBy == some `LeanEvidenceTests.Fixtures.even_four) do
     throwError "A proved conjecture was not recognised"
   if proved unlistedProof.premises then
     throwError "A conjecture counted as proved by a theorem comparator.json does not list"
@@ -155,8 +156,9 @@ run_cmd Elab.Command.liftTermElabM do
   unless killed.map (·.1) == #[`LeanEvidenceTests.Fixtures.identity_fixed,
       `LeanEvidenceTests.Fixtures.bounded] do
     throwError "A kill was reported as a headline: {killed.map (·.1)}"
-  expect (Audit.meaningful killed) "bounded" "no kill"
-  if (Audit.meaningful killed).any (contains · "identity_fixed") then
+  expect (Audit.meaningful killed #[] {}) "bounded" "no kill"
+  expect (Audit.meaningful #[] #[`h] {}) "h" "no headline mentions this hole"
+  if (Audit.meaningful killed #[] {}).any (contains · "identity_fixed") then
     throwError "A killed headline was reported unkilled"
 
 end

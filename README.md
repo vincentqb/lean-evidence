@@ -99,12 +99,15 @@ module of the default targets into one environment, so only one of them may defi
 lake build        # audit and headline report
 lake test         # your tests, including the live suites
 lake comparator   # MyApp/Claims.lean proves exactly the statements in Manifest.lean
+lake script run lean_evidence/grade <commit>   # judge a candidate from this checkout
 ```
 
 The audit reruns and prints its report only when a module, `Audit.lean`, `comparator.json`, or
 `Manifest.lean` changes; `.lake/build/leanEvidence.txt` keeps the last report.
 
-The report's `Owned:` line lists the files that decide what is claimed: review their changes
-before you push. `Check` on foreign code needs `precompileModules`. `lake comparator`
+The report's `Owned:` line lists the files that decide what is claimed. `grade` refuses a
+candidate that changes or adds one, then builds it in a fresh worktree and runs `lake build`,
+`lake comparator` and `lake test`; it exits 0 to accept, 1 to refuse, and 3 when it cannot
+judge. `Check` on foreign code needs `precompileModules`. `lake comparator`
 replays the headline proofs through the kernel in a separate process, which rejects proofs
 that skipped the kernel during the build.

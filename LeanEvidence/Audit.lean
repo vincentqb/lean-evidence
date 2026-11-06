@@ -121,8 +121,8 @@ structure Headline where
 def headline (listed : Array Name) (name : Name) : MetaM Headline := do
   let env ← getEnv
   let some info := env.find? name | throwError "Headline {name} is not compiled"
-  let provedByListed := fun (statement : Expr) => !statement.hasFVar && !statement.hasMVar &&
-    listed.any fun theorem_ => (env.find? theorem_).any (·.type == statement)
+  let listedProof := fun (statement : Expr) => if statement.hasFVar || statement.hasMVar then none
+    else listed.find? fun theorem_ => (env.find? theorem_).any (·.type == statement)
   Meta.forallTelescope info.type fun binders _ => do
     let mut premises := #[]
     let mut unnamed := #[]
@@ -130,7 +130,7 @@ def headline (listed : Array Name) (name : Name) : MetaM Headline := do
       let statement ← Meta.inferType binder
       let claim := statement.getAppFn.constName
       if let some kind := claimKind? env claim then
-        premises := premises.push { claim, kind, discharged := provedByListed statement }
+        premises := premises.push { claim, kind, dischargedBy := listedProof statement }
       else if !statement.hasFVar && (← Meta.isProp statement) then
         unnamed := unnamed.push (toString (← Meta.ppExpr statement))
     return { name, premises, unnamed }
@@ -157,9 +157,11 @@ def killsOf (replaceable : NameSet) (theorems : Array Name) : MetaM (Array (Name
   let killers := found.flatMap (·.2)
   return found.filter (!killers.contains ·.1)
 
-def meaningful (killed : Array (Name × Array Name)) : Array String :=
-  killed.filterMap fun (headline, found) =>
-    if found.isEmpty then some s!"{headline}: no kill shows it rejects a wrong implementation" else none
+def meaningful (killed : Array (Name × Array Name)) (holes : Array Name) (mentioned : NameSet) :
+    Array String :=
+  (killed.filterMap fun (headline, found) =>
+    if found.isEmpty then some s!"{headline}: no kill shows it rejects a wrong implementation" else none) ++
+  (holes.filter (!mentioned.contains ·)).map (s!"{·}: no headline mentions this hole")
 
 private def compiledCallees (env : Environment) (name : Name) : Array Name :=
   let compiled := (env.find? (Compiler.mkUnsafeRecName name)).orElse fun _ => env.find? name
@@ -249,8 +251,11 @@ private def describe (evidence : Array Evidence) (premise : Premise) : String :=
   let found := evidence.filter (·.claim == premise.claim)
   let count := fun kind => (found.filter (·.kind == kind)).size
   let suites := found.filterMap fun e => if e.kind == .suite then some (toString e.source) else none
-  let kind := if premise.kind == .world then "world" else if premise.discharged then "proved" else "open"
-  s!"{kind} {premise.claim} [{count .test} tests, {count .check} checks" ++
+  let status := match premise.kind, premise.dischargedBy with
+    | .world, _ => s!"world {premise.claim}"
+    | _, some proof => s!"proved {premise.claim} by {proof}"
+    | _, none => s!"open {premise.claim}"
+  s!"{status} [{count .test} tests, {count .check} checks" ++
     (if suites.isEmpty then "]" else s!", suites {", ".intercalate suites.toList}]")
 
 def run (project : Project) (args : List String) : IO Unit := do
@@ -258,7 +263,7 @@ def run (project : Project) (args : List String) : IO Unit := do
   let catalog := args.toArray.map String.toName
   unless catalog.contains config.solution_module do
     throw <| .userError s!"solution_module {config.solution_module} is not built by a default target"
-  let (inventory, evidence, headlines, killed, holeRoles, registrations, entry) ←
+  let (inventory, evidence, headlines, killed, mentioned, holeRoles, registrations, entry) ←
     withEnvironment catalog <| Meta.MetaM.run' do
       let env ← getEnv
       let moduleOf := fun (name : Name) =>
@@ -274,7 +279,9 @@ def run (project : Project) (args : List String) : IO Unit := do
       let running := fun name => (moduleOf name).any fun module =>
         catalog.contains module && project.role? module != some .tooling
       let reached := reachedFrom env running `main
-      return (inventory, allEvidence env, ← killed.mapM (headline config.theorem_names ·.1), killed,
+      let mentioned := NameSet.ofList <| (killed.flatMap fun (name, _) =>
+        ((env.find? name).map (·.type.getUsedConstants)).getD #[]).toList
+      return (inventory, allEvidence env, ← killed.mapM (headline config.theorem_names ·.1), killed, mentioned,
         config.holes.map fun hole => (hole, roleOf hole), registrations,
         if env.contains `main then some (roleOf `main, config.holes.filter (!reached.contains ·))
         else none)
@@ -282,7 +289,7 @@ def run (project : Project) (args : List String) : IO Unit := do
   let (theorems, holes) ← challengeDeclarations config.challenge_module
   let failures :=
     (sound project inventory holeRoles entry headlines).map ("sound: " ++ ·) ++
-    (meaningful killed).map ("meaningful: " ++ ·) ++
+    (meaningful killed config.holes mentioned).map ("meaningful: " ++ ·) ++
     (owned project config registrations imports theorems holes).map ("owned: " ++ ·) ++
     (evidenced headlines evidence).map ("evidence: " ++ ·)
   unless project.check inventory && failures.isEmpty do
