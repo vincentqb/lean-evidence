@@ -6,7 +6,7 @@ public section
 
 open Lean
 
-namespace LeanEvidence
+namespace SoftwareChallenge
 
 inductive Role where
   | spec | boundary | core | shell | tooling
@@ -144,4 +144,4 @@ theorem layering_sound (project : Project) (inventory : Inventory)
   | single edge => exact import_step accepted (fun _ owner => by simp_all) edge
   | tail _ edge previous => exact import_step accepted previous.1 edge
 
-end LeanEvidence
+end SoftwareChallenge

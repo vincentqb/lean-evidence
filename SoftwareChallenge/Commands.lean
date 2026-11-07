@@ -1,6 +1,6 @@
 module
 
-public meta import LeanEvidence.Policy
+public meta import SoftwareChallenge.Policy
 public meta import Lean
 
 public section
@@ -8,7 +8,7 @@ meta section
 
 open Lean Elab Command
 
-namespace LeanEvidence
+namespace SoftwareChallenge
 
 inductive EvidenceKind where
   | test | check | suite
@@ -102,4 +102,4 @@ initialize registerBuiltinAttribute {
     modifyEnv (evidenceExt.addEntry · { claim := name, kind := .suite, source := suite })
 }
 
-end LeanEvidence
+end SoftwareChallenge

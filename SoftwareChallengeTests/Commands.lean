@@ -1,16 +1,16 @@
 module
 
-public import LeanEvidenceTests.Fixtures.Shell
-import all LeanEvidenceTests.Fixtures.Core
-meta import LeanEvidenceTests.Fixtures.Core
-meta import LeanEvidenceTests.Support
-public meta import LeanEvidence
+public import SoftwareChallengeTests.Fixtures.Shell
+import all SoftwareChallengeTests.Fixtures.Core
+meta import SoftwareChallengeTests.Fixtures.Core
+meta import SoftwareChallengeTests.Support
+public meta import SoftwareChallenge
 
 public section
 
-namespace LeanEvidenceTests.Commands
+namespace SoftwareChallengeTests.Commands
 
-open LeanEvidenceTests.Fixtures
+open SoftwareChallengeTests.Fixtures
 
 rejects "doc comment" in WorldClaim Undocumented := True
 
@@ -35,6 +35,6 @@ rejects "not a WorldClaim or Conjecture" in
   @[exercises Nat.add] def bogusSuite : IO Unit := pure ()
 
 rejects "marked as `meta`" in
-  def runtimeEvidence : Bool := (LeanEvidence.allEvidence default).isEmpty
+  def runtimeEvidence : Bool := (SoftwareChallenge.allEvidence default).isEmpty
 
-end LeanEvidenceTests.Commands
+end SoftwareChallengeTests.Commands

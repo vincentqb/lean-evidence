@@ -1,7 +1,7 @@
 import Lake
 open Lean Lake DSL
 
-package «lean_evidence» where
+package «software_challenge» where
   builtinLint := true
   fixedToolchain := true
   leanOptions := #[
@@ -11,38 +11,38 @@ package «lean_evidence» where
   ]
 
 @[default_target]
-lean_lib «LeanEvidence» where
-  globs := #[.andSubmodules `LeanEvidence]
+lean_lib «SoftwareChallenge» where
+  globs := #[.andSubmodules `SoftwareChallenge]
 
 @[default_target]
 lean_lib «Examples» where
-  roots := #[`Examples.ConstantFolding.Claims]
+  roots := #[`Examples.ConstantFolding.Solution]
   globs := #[.submodules `Examples.ConstantFolding]
   precompileModules := true
 
-lean_lib «LeanEvidenceManifest» where
+lean_lib «ConstantFoldingChallenge» where
   leanOptions := #[⟨`warn.sorry, false⟩]
 
-lean_lib «LeanEvidenceTests» where
+lean_lib «SoftwareChallengeTests» where
   precompileModules := true
   leanOptions := #[⟨`linter.extra.unreachableTactic, false⟩]
 
 @[test_driver] script test do
   let lake := (← getLake).toString
-  for args in [#["build"], #["lint"], #["build", "LeanEvidenceTests"], #["comparator"]] do
+  for args in [#["build"], #["lint"], #["build", "SoftwareChallengeTests"], #["comparator"]] do
     let code ← (← IO.Process.spawn { cmd := lake, args, cwd := (← getRootPackage).dir }).wait
     unless code == 0 do return code
   return 0
 
 script grade (args) do
   let [candidate] := args
-    | do IO.eprintln "usage: lake script run lean_evidence/grade <candidate commit>"; return 3
+    | do IO.eprintln "usage: lake script run software_challenge/grade <candidate commit>"; return 3
   let base := (← getRootPackage).dir
   let lake := (← getLake).toString
   let run (cmd : String) (args : Array String) (cwd : System.FilePath) : IO UInt32 := do
     (← IO.Process.spawn { cmd, args, cwd := some cwd }).wait
   let ownedFiles (dir : System.FilePath) : IO (Array String) := do
-    let report ← IO.FS.readFile (dir / ".lake" / "build" / "leanEvidence.txt")
+    let report ← IO.FS.readFile (dir / ".lake" / "build" / "softwareChallenge.txt")
     let some line := (report.splitOn "\n").find? (·.startsWith "Owned: ")
       | throw <| IO.userError s!"{dir} reports no owned files"
     return ((line.splitOn " ").drop 1).toArray
@@ -70,8 +70,8 @@ script grade (args) do
     discard <| run "git" #["worktree", "remove", "--force", checkout.toString] base
     IO.FS.removeDirAll scratch
 
-package_facet leanEvidence pkg : Unit := do
-  let some audit ← findModule? `LeanEvidence.Audit | error "LeanEvidence.Audit is unavailable"
+package_facet softwareChallenge pkg : Unit := do
+  let some audit ← findModule? `SoftwareChallenge.Audit | error "SoftwareChallenge.Audit is unavailable"
   let config ← IO.ofExcept <| Json.parse (← IO.FS.readFile (pkg.dir / "comparator.json"))
   let challenge ← IO.ofExcept <| config.getObjValAs? String "challenge_module"
   let some manifest ← findModule? challenge.toName | error s!"{challenge} is unavailable"
@@ -85,7 +85,7 @@ package_facet leanEvidence pkg : Unit := do
   job.mapM fun _ => do
     for file in [pkg.dir / "Audit.lean", pkg.dir / "comparator.json"] do
       addTrace (← BuildTrace.compute (TextFilePath.mk file))
-    let report := pkg.buildDir / "leanEvidence.txt"
+    let report := pkg.buildDir / "softwareChallenge.txt"
     let upToDate ← buildUnlessUpToDate? report (← getTrace) (report.addExtension "trace") do
       IO.FS.writeFile report (← captureProc {
         cmd := (← getLean).toString
@@ -97,4 +97,4 @@ package_facet leanEvidence pkg : Unit := do
 
 @[default_target]
 target audit pkg : Unit := do
-  return (← pkg.fetchFacetJob `leanEvidence).map (fun _ => ())
+  return (← pkg.fetchFacetJob `softwareChallenge).map (fun _ => ())

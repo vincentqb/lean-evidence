@@ -1,13 +1,13 @@
 module
 
-public meta import LeanEvidence.Commands
+public meta import SoftwareChallenge.Commands
 
 public section
 meta section
 
 open Lean
 
-namespace LeanEvidence.Audit
+namespace SoftwareChallenge.Audit
 
 private def closure (next : Name → Array Name) (roots : Array Name) : NameSet := Id.run do
   let mut pending := roots
@@ -101,7 +101,7 @@ def collect (catalog : Array Name) : CoreM Inventory := do
 def withEnvironment {α : Type} (modules : Array Name) (action : CoreM α) : IO α := do
   unsafe enableInitializersExecution
   let env ← importModules (modules.map ({ module := · })) {} (loadExts := true)
-  let (result, _) ← action.toIO { fileName := "<lean-evidence>", fileMap := default, maxHeartbeats := 0 } { env }
+  let (result, _) ← action.toIO { fileName := "<lean-software-challenge>", fileMap := default, maxHeartbeats := 0 } { env }
   return result
 
 structure Config where
@@ -157,12 +157,6 @@ def killsOf (replaceable : NameSet) (theorems : Array Name) : MetaM (Array (Name
   let killers := found.flatMap (·.2)
   return found.filter (!killers.contains ·.1)
 
-def meaningful (killed : Array (Name × Array Name)) (holes : Array Name) (mentioned : NameSet) :
-    Array String :=
-  (killed.filterMap fun (headline, found) =>
-    if found.isEmpty then some s!"{headline}: no kill shows it rejects a wrong implementation" else none) ++
-  (holes.filter (!mentioned.contains ·)).map (s!"{·}: no headline mentions this hole")
-
 private def compiledCallees (env : Environment) (name : Name) : Array Name :=
   let compiled := (env.find? (Compiler.mkUnsafeRecName name)).orElse fun _ => env.find? name
   ((compiled.bind (·.value? (allowOpaque := true))).map (·.getUsedConstants)).getD #[]
@@ -170,55 +164,71 @@ private def compiledCallees (env : Environment) (name : Name) : Array Name :=
 def reachedFrom (env : Environment) (running : Name → Bool) (root : Name) : NameSet :=
   closure (fun name => (compiledCallees env name).filter running) #[root]
 
-def sound (project : Project) (inventory : Inventory) (holes : Array (Name × Option Role))
-    (entry : Option (Option Role × Array Name)) (headlines : Array Headline) : Array String := Id.run do
+structure Facts where
+  inventory : Inventory := ⟨#[], #[]⟩
+  evidence : Array Evidence := #[]
+  headlines : Array Headline := #[]
+  killsByHeadline : Array (Name × Array Name) := #[]
+  mentioned : NameSet := {}
+  holes : Array (Name × Option Role) := #[]
+  registrations : Array (Name × Option Role × Bool) := #[]
+  entry : Option (Option Role × Array Name) := none
+  challengeImports : Array Name := #[]
+  challengeTheorems : Array Name := #[]
+  challengeHoles : Array Name := #[]
+
+def sound (project : Project) (facts : Facts) : Array String := Id.run do
   let mut errors := #[]
-  for fact in inventory.modules do
+  for fact in facts.inventory.modules do
     let some role := project.role? fact.name
       | errors := errors.push s!"Unclassified module {fact.name}"
     unless fact.usesModuleSystem do errors := errors.push s!"{fact.name}: start the file with `module`"
     for dependency in fact.imports do
       unless project.admits role dependency do
         errors := errors.push s!"{fact.name} ({repr role}) may not import {dependency.name}"
-  for fact in inventory.declarations do
+  for fact in facts.inventory.declarations do
     if let some role := project.role? fact.moduleName then
       let reasons := fact.reasons role
       unless reasons.isEmpty do
         errors := errors.push s!"{fact.name} ({repr role}): {", ".intercalate reasons}"
-  for (hole, role) in holes do
+  for (hole, role) in facts.holes do
     unless role matches some .core | some .shell do
       errors := errors.push s!"{hole}: a definition hole must be a core or shell definition"
-  if let some (role, unreached) := entry then
+  if let some (role, unreached) := facts.entry then
     unless role matches some .shell do errors := errors.push "main: declare it in a shell module"
     for hole in unreached do errors := errors.push s!"{hole}: main never reaches this hole"
-  for line in headlines do
+  for line in facts.headlines do
     for hypothesis in line.unnamed do
       errors := errors.push s!"{line.name}: hypothesis {hypothesis} is not a WorldClaim or Conjecture"
   return errors
 
-def owned (project : Project) (config : Config) (registrations : Array (Name × Option Role × Bool))
-    (challengeImports : Array Name) (theorems holes : Array Name) : Array String := Id.run do
+def meaningful (facts : Facts) : Array String :=
+  (facts.killsByHeadline.filterMap fun (headline, found) =>
+    if found.isEmpty then some s!"{headline}: no kill shows it rejects a wrong implementation" else none) ++
+  (facts.holes.filter (!facts.mentioned.contains ·.1)).map (s!"{·.1}: no headline mentions this hole")
+
+def owned (project : Project) (config : Config) (facts : Facts) : Array String := Id.run do
   let mut errors := #[]
-  for (claim, role, declaredThere) in registrations do
+  for (claim, role, declaredThere) in facts.registrations do
     if role.isSome && role != some .spec then
       errors := errors.push s!"{claim}: declare claims in a spec module"
     unless declaredThere do
       errors := errors.push s!"{claim}: registered outside the module that declares it"
-  for dependency in challengeImports do
+  for dependency in facts.challengeImports do
     unless project.admits .spec { name := dependency, comptime := false } do
       errors := errors.push s!"{config.challenge_module} imports {dependency}; \
         a challenge may import only spec and boundary modules and trusted roots"
-  for (field, declared, listed) in
-      #[("theorem_names", theorems, config.theorem_names), ("definition_names", holes, config.holes)] do
+  for (field, declared, listed) in #[("theorem_names", facts.challengeTheorems, config.theorem_names),
+      ("definition_names", facts.challengeHoles, config.holes)] do
     for name in declared.filter (!listed.contains ·) do
       errors := errors.push s!"{config.challenge_module} declares {name}, which comparator.json {field} omits"
     for name in listed.filter (!declared.contains ·) do
       errors := errors.push s!"comparator.json {field} lists {name}, which {config.challenge_module} does not declare"
   return errors
 
-def evidenced (headlines : Array Headline) (evidence : Array Evidence) : Array String :=
-  headlines.flatMap fun line => line.premises.filterMap fun premise =>
-    if premise.kind == .world && !evidence.any (·.claim == premise.claim) then
+def evidenced (facts : Facts) : Array String :=
+  facts.headlines.flatMap fun line => line.premises.filterMap fun premise =>
+    if premise.kind == .world && !facts.evidence.any (·.claim == premise.claim) then
       some s!"{line.name}: world assumption {premise.claim} has no Test, Check, or live suite"
     else none
 
@@ -258,47 +268,51 @@ private def describe (evidence : Array Evidence) (premise : Premise) : String :=
   s!"{status} [{count .test} tests, {count .check} checks" ++
     (if suites.isEmpty then "]" else s!", suites {", ".intercalate suites.toList}]")
 
+def gather (project : Project) (config : Config) (catalog : Array Name) : IO Facts := do
+  let facts ← withEnvironment catalog <| Meta.MetaM.run' do
+    let env ← getEnv
+    let moduleOf := fun (name : Name) =>
+      (env.getModuleIdxFor? name).map (env.header.modules[·.toNat]!.module)
+    let roleOf := fun (name : Name) => (moduleOf name).bind project.role?
+    let inventory ← collect catalog
+    let boundary := inventory.declarations.filter (project.role? ·.moduleName == some .boundary)
+    let killsByHeadline ← killsOf (NameSet.ofList (config.holes ++ boundary.map (·.name)).toList)
+      config.theorem_names
+    let running := fun name => (moduleOf name).any fun module =>
+      catalog.contains module && project.role? module != some .tooling
+    let reached := reachedFrom env running `main
+    return {
+      inventory, killsByHeadline
+      evidence := allEvidence env
+      headlines := ← killsByHeadline.mapM (headline config.theorem_names ·.1)
+      mentioned := NameSet.ofList <| (killsByHeadline.flatMap fun (name, _) =>
+        ((env.find? name).map (·.type.getUsedConstants)).getD #[]).toList
+      holes := config.holes.map fun hole => (hole, roleOf hole)
+      registrations := catalog.flatMap fun module =>
+        (PersistentEnvExtension.getModuleEntries claimsExt env (env.getModuleIdx? module).get!).map
+          fun (claim, _) => (claim, project.role? module, moduleOf claim == some module)
+      entry := if env.contains `main then some (roleOf `main, config.holes.filter (!reached.contains ·))
+        else none : Facts }
+  let (challengeTheorems, challengeHoles) ← challengeDeclarations config.challenge_module
+  return { facts with
+    challengeTheorems, challengeHoles
+    challengeImports := ← challengeImports config.challenge_module }
+
 def run (project : Project) (args : List String) : IO Unit := do
   let config : Config ← IO.ofExcept <| Json.parse (← IO.FS.readFile "comparator.json") >>= fromJson?
   let catalog := args.toArray.map String.toName
   unless catalog.contains config.solution_module do
     throw <| .userError s!"solution_module {config.solution_module} is not built by a default target"
-  let (inventory, evidence, headlines, killed, mentioned, holeRoles, registrations, entry) ←
-    withEnvironment catalog <| Meta.MetaM.run' do
-      let env ← getEnv
-      let moduleOf := fun (name : Name) =>
-        (env.getModuleIdxFor? name).map (env.header.modules[·.toNat]!.module)
-      let roleOf := fun (name : Name) => (moduleOf name).bind project.role?
-      let inventory ← collect catalog
-      let boundary := inventory.declarations.filter (project.role? ·.moduleName == some .boundary)
-      let killed ← killsOf (NameSet.ofList (config.holes ++ boundary.map (·.name)).toList)
-        config.theorem_names
-      let registrations := catalog.flatMap fun module =>
-        (PersistentEnvExtension.getModuleEntries claimsExt env (env.getModuleIdx? module).get!).map
-          fun (claim, _) => (claim, project.role? module, moduleOf claim == some module)
-      let running := fun name => (moduleOf name).any fun module =>
-        catalog.contains module && project.role? module != some .tooling
-      let reached := reachedFrom env running `main
-      let mentioned := NameSet.ofList <| (killed.flatMap fun (name, _) =>
-        ((env.find? name).map (·.type.getUsedConstants)).getD #[]).toList
-      return (inventory, allEvidence env, ← killed.mapM (headline config.theorem_names ·.1), killed, mentioned,
-        config.holes.map fun hole => (hole, roleOf hole), registrations,
-        if env.contains `main then some (roleOf `main, config.holes.filter (!reached.contains ·))
-        else none)
-  let imports ← challengeImports config.challenge_module
-  let (theorems, holes) ← challengeDeclarations config.challenge_module
-  let failures :=
-    (sound project inventory holeRoles entry headlines).map ("sound: " ++ ·) ++
-    (meaningful killed config.holes mentioned).map ("meaningful: " ++ ·) ++
-    (owned project config registrations imports theorems holes).map ("owned: " ++ ·) ++
-    (evidenced headlines evidence).map ("evidence: " ++ ·)
-  unless project.check inventory && failures.isEmpty do
-    throw <| IO.userError ("LeanEvidence audit failed:\n" ++ "\n".intercalate failures.toList)
-  IO.println s!"Checked {inventory.modules.size} modules and {inventory.declarations.size} declarations"
-  for (line, (_, found)) in headlines.zip killed do
-    let notes := line.premises.map (describe evidence) |>.push
+  let facts ← gather project config catalog
+  let failures := (sound project facts).map ("sound: " ++ ·) ++ (meaningful facts).map ("meaningful: " ++ ·) ++
+    (owned project config facts).map ("owned: " ++ ·) ++ (evidenced facts).map ("evidence: " ++ ·)
+  unless project.check facts.inventory && failures.isEmpty do
+    throw <| IO.userError ("SoftwareChallenge audit failed:\n" ++ "\n".intercalate failures.toList)
+  IO.println s!"Checked {facts.inventory.modules.size} modules and {facts.inventory.declarations.size} declarations"
+  for (line, (_, found)) in facts.headlines.zip facts.killsByHeadline do
+    let notes := line.premises.map (describe facts.evidence) |>.push
       s!"killed by {", ".intercalate (found.map toString).toList}"
     IO.println s!"{if proved line.premises then "●" else "◕"} {line.name}  ({"; ".intercalate notes.toList})"
-  IO.println s!"Owned: {" ".intercalate (← ownedFiles project inventory config.challenge_module).toList}"
+  IO.println s!"Owned: {" ".intercalate (← ownedFiles project facts.inventory config.challenge_module).toList}"
 
-end LeanEvidence.Audit
+end SoftwareChallenge.Audit

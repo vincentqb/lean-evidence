@@ -1,12 +1,12 @@
 module
 
-public import LeanEvidenceTests.Fixtures.Boundary
-meta import LeanEvidenceTests.Fixtures.Boundary
-public meta import LeanEvidence
+public import SoftwareChallengeTests.Fixtures.Boundary
+meta import SoftwareChallengeTests.Fixtures.Boundary
+public meta import SoftwareChallenge
 
 public section
 
-namespace LeanEvidenceTests.Fixtures
+namespace SoftwareChallengeTests.Fixtures
 
 /-- The native successor returns n + 1. Any other result falsifies it. -/
 WorldClaim SuccAgrees := ∀ n, nativeSucc n = n + 1
@@ -23,4 +23,4 @@ Conjecture Identity (f : Nat → Nat) := ∀ n, f n = n
 
 Conjecture EvenFour := 4 % 2 = 0
 
-end LeanEvidenceTests.Fixtures
+end SoftwareChallengeTests.Fixtures

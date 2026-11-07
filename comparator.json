@@ -1,6 +1,6 @@
 {
-  "challenge_module": "LeanEvidenceManifest",
-  "solution_module": "Examples.ConstantFolding.Claims",
+  "challenge_module": "ConstantFoldingChallenge",
+  "solution_module": "Examples.ConstantFolding.Solution",
   "theorem_names": [
     "Examples.ConstantFolding.fold_preserves_meaning",
     "Examples.ConstantFolding.fold_closed_literal",

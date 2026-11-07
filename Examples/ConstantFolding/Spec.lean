@@ -2,7 +2,7 @@ module
 
 public import Examples.ConstantFolding.Boundary
 meta import Examples.ConstantFolding.Boundary
-public meta import LeanEvidence
+public meta import SoftwareChallenge
 
 public section
 

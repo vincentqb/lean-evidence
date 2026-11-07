@@ -1,11 +1,11 @@
 module
 
-public import LeanEvidenceTests.Fixtures.Core
-public meta import LeanEvidence
+public import SoftwareChallengeTests.Fixtures.Core
+public meta import SoftwareChallenge
 
 public section
 
-namespace LeanEvidenceTests.Fixtures
+namespace SoftwareChallengeTests.Fixtures
 
 initialize counter : IO.Ref Nat ← IO.mkRef 0
 
@@ -21,4 +21,4 @@ partial def loopIdentity (n : Nat) : IO Unit := do
   let second ← IO.monoMsNow
   unless first ≤ second do throw (IO.userError "the monotonic clock ran backwards")
 
-end LeanEvidenceTests.Fixtures
+end SoftwareChallengeTests.Fixtures

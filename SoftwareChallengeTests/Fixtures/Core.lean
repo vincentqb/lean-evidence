@@ -1,11 +1,11 @@
 module
 
-public import LeanEvidenceTests.Fixtures.Spec
-public meta import LeanEvidence
+public import SoftwareChallengeTests.Fixtures.Spec
+public meta import SoftwareChallenge
 
 public section
 
-namespace LeanEvidenceTests.Fixtures
+namespace SoftwareChallengeTests.Fixtures
 
 inductive Tree where
   | leaf
@@ -59,4 +59,4 @@ theorem uses_unnamed (h : 1 = 2) : 1 = 2 := h
 
 Conjecture CoreClaim := 1 = 1
 
-end LeanEvidenceTests.Fixtures
+end SoftwareChallengeTests.Fixtures

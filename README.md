@@ -1,30 +1,32 @@
-# LeanEvidence
+# Lean Software Challenge
 
-For software written in **Lean 4.35.0**: state the theorems you never want to lose in files
-agents cannot edit; `lake comparator` checks that the code still proves them, and
-`lake build` checks that the code they constrain is the code that runs.
+A repository that uses this library is a challenge: implement code that does what its headline
+theorems say. You own the challenge, and agents submit solutions made of code and proofs. A
+solution is accepted when Lean's kernel proves the headlines of the code that runs, every
+headline rejects a wrong implementation, and no challenge file changed. Requires **Lean 4.35.0**.
 
 ## Files
 
 | File | Contains | Edited by |
 |---|---|---|
+| `Challenge.lean` | the headline theorems and their kills, stated with `sorry` | you |
+| `comparator.json` | the headlines, kills, and holes `lake comparator` checks | you |
 | `MyApp/Spec.lean` | types, reference definitions, and the claims headlines rest on | you |
-| `MyApp/Boundary.lean` | `@[extern]` declarations for foreign code | you |
-| `MyApp/Core/…` | pure code: public interface, private helpers, and their proofs | agents |
-| `MyApp/Shell.lean` | IO that connects the core to the world | agents |
-| `Manifest.lean` | headline theorems, stated with `sorry` | you |
-| `MyApp/Claims.lean` | proofs of the headline theorems | agents |
-| `comparator.json` | the headlines and the functions they constrain | you |
+| `MyApp/Boundary.lean` | `@[extern] opaque` declarations for foreign code | you |
 | `Audit.lean` | the role of each module prefix | you |
+| `MyApp/Core/…` | pure code: public interface, private helpers, and their proofs | agents |
+| `MyApp/Shell.lean` | IO that connects the core to the world, and `main` | agents |
+| `MyApp/Solution.lean` | proofs of the headlines and kills | agents |
 
 Headlines are end-to-end theorems: they say what the program does in terms of the spec,
-assuming only named claims. In the [template](Examples/ConstantFolding), `output_correct`
-says the shell prints the true value of an expression, assuming native addition is correct.
+assuming only named claims. In the [template](Examples/ConstantFolding), whose challenge is
+[`ConstantFoldingChallenge.lean`](ConstantFoldingChallenge.lean), `output_correct` says the
+shell prints the true value of an expression, assuming native addition is correct.
 
 ## Syntax
 
 ```lean
-public meta import LeanEvidence
+public meta import SoftwareChallenge
 
 /-- The adder agrees with `Nat.add`. A different sum for any pair falsifies it. -/
 WorldClaim AddAgrees (add : Nat → Nat → Nat) := ∀ a b, add a b = a + b
@@ -45,7 +47,8 @@ theorem output_correct_rejects_suffix :
   observation that would falsify it, and the foreign code it constrains is a parameter.
 - `Check Claim : instance` runs one instance of a claim during the build, foreign code included.
 - `@[exercises Claim]` marks a live suite that exercises a claim; the report names it.
-- `Conjecture Name := P` names a claim not yet proved; a theorem of type `Name` discharges it.
+- `Conjecture Name := P` names a claim not yet proved; a theorem of type `Name` listed in
+  `comparator.json` proves it.
 - `Test Claim : instance := proof` proves one instance of a claim in the kernel.
 - A headline takes the claims it rests on as hypotheses; `lake build` reports it proved (●)
   once its conjectures are proved and derived (◕) until then.
@@ -60,20 +63,20 @@ suite, or `Test`.
 In `lakefile.lean`:
 
 ```lean
-require lean_evidence from git "https://github.com/vincentqb/lean-evidence" @ "main"
+require software_challenge from git "https://github.com/vincentqb/lean-software-challenge" @ "main"
 
 @[default_target]
 target audit pkg : Unit := do
-  return (← pkg.fetchFacetJob `leanEvidence).map (fun _ => ())
+  return (← pkg.fetchFacetJob `softwareChallenge).map (fun _ => ())
 ```
 
 In `Audit.lean`, the longest matching prefix gives each module its role:
 
 ```lean
 module
-public meta import LeanEvidence.Audit
+public meta import SoftwareChallenge.Audit
 
-public meta def main : List String → IO Unit := LeanEvidence.Audit.run {
+public meta def main : List String → IO Unit := SoftwareChallenge.Audit.run {
   layers := #[(`MyApp, .tooling), (`MyApp.Spec, .spec), (`MyApp.Boundary, .boundary),
     (`MyApp.Core, .core), (`MyApp.Shell, .shell)] }
 ```
@@ -82,32 +85,32 @@ public meta def main : List String → IO Unit := LeanEvidence.Audit.run {
   initializers, IO, or `dbg*`.
 - `.boundary` code is `@[extern] opaque` declarations only.
 - `.shell` code may do IO but not `unsafe`, `@[extern]`, or `@[implemented_by]`.
-- `.tooling` covers `Claims` and scripts; like every role, it may use only standard axioms.
+- `.tooling` covers `Solution` and scripts; like every role, it may use only standard axioms.
 - Non-`meta` imports run from tooling to shell to core to spec and boundary, never back;
   other libraries must be listed in `trusted`, which defaults to `Init`, `Std`, and `Lean`.
 
-`Manifest.lean` imports only spec and boundary modules and declares each core or shell
+`Challenge.lean` imports only spec and boundary modules and declares each core or shell
 function a headline mentions as a hole with the code's exact type, `def name : T := sorry`;
-[`comparator.json`](comparator.json) lists exactly its headlines and holes, and `main` must
-reach every hole. Put `Claims` in a default target, and declare `Manifest` as a `lean_lib`
-that is not one, with `leanOptions := #[⟨`warn.sorry, false⟩]`. The audit imports every
-module of the default targets into one environment, so only one of them may define `main`.
+[`comparator.json`](comparator.json) lists exactly its theorems and holes, and `main` must
+reach every hole. Put `Solution` in a default target, and declare `Challenge` as a `lean_lib`
+that is not one, with `leanOptions := #[⟨`warn.sorry, false⟩]`. The audit imports every module
+of the default targets into one environment, so only one of them may define `main`.
 
 ## Run
 
 ```sh
 lake build        # audit and headline report
 lake test         # your tests, including the live suites
-lake comparator   # MyApp/Claims.lean proves exactly the statements in Manifest.lean
-lake script run lean_evidence/grade <commit>   # judge a candidate from this checkout
+lake comparator   # MyApp/Solution.lean proves exactly the statements in Challenge.lean
+lake script run software_challenge/grade <commit>   # judge a candidate from this checkout
 ```
 
 The audit reruns and prints its report only when a module, `Audit.lean`, `comparator.json`, or
-`Manifest.lean` changes; `.lake/build/leanEvidence.txt` keeps the last report.
+`Challenge.lean` changes; `.lake/build/softwareChallenge.txt` keeps the last report.
 
 The report's `Owned:` line lists the files that decide what is claimed. `grade` refuses a
 candidate that changes or adds one, then builds it in a fresh worktree and runs `lake build`,
 `lake comparator` and `lake test`; it exits 0 to accept, 1 to refuse, and 3 when it cannot
-judge. `Check` on foreign code needs `precompileModules`. `lake comparator`
-replays the headline proofs through the kernel in a separate process, which rejects proofs
-that skipped the kernel during the build.
+judge. `Check` on foreign code needs `precompileModules`. `lake comparator` replays the
+headline proofs through the kernel in a separate process, which rejects proofs that skipped
+the kernel during the build.

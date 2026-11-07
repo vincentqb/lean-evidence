@@ -1,13 +1,13 @@
 module
 
-public meta import LeanEvidence.Commands
+public meta import SoftwareChallenge.Commands
 
 public section
 meta section
 
-open Lean Elab Command LeanEvidence
+open Lean Elab Command SoftwareChallenge
 
-namespace LeanEvidenceTests
+namespace SoftwareChallengeTests
 
 elab "rejects " reason:str " in " cmd:command : command => do
   let saved ← get
@@ -34,4 +34,4 @@ elab "assert_evidence " n:ident " = " tests:num " tests " checks:num " checks " 
       count .suite == suites.getNat do
     throwError "{name}: {count .test} tests, {count .check} checks, {count .suite} suites"
 
-end LeanEvidenceTests
+end SoftwareChallengeTests

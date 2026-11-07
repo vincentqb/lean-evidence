@@ -1,7 +1,7 @@
 module
 
 public import Examples.ConstantFolding.Spec
-public meta import LeanEvidence
+public meta import SoftwareChallenge
 
 public section
 

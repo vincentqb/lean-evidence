@@ -1,11 +1,11 @@
 module
 
-public import LeanEvidenceTests.Fixtures.Shell
-meta import LeanEvidence.Commands
+public import SoftwareChallengeTests.Fixtures.Shell
+meta import SoftwareChallenge.Commands
 
 public section
 
-namespace LeanEvidenceTests.Fixtures.Rejected
+namespace SoftwareChallengeTests.Fixtures.Rejected
 
 private unsafe def hiddenUnsafe (n : Nat) : Nat := n + 1
 
@@ -40,7 +40,7 @@ private theorem chained : 1 = 2 := viaRaw.elim
 
 theorem hole : Identity identity := by sorry
 
-run_cmd Lean.modifyEnv (LeanEvidence.claimsExt.addEntry ·
-  (`LeanEvidenceTests.Fixtures.Identity, LeanEvidence.ClaimKind.world))
+run_cmd Lean.modifyEnv (SoftwareChallenge.claimsExt.addEntry ·
+  (`SoftwareChallengeTests.Fixtures.Identity, SoftwareChallenge.ClaimKind.world))
 
-end LeanEvidenceTests.Fixtures.Rejected
+end SoftwareChallengeTests.Fixtures.Rejected

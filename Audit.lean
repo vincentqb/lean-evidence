@@ -1,8 +1,8 @@
 module
 
-public meta import LeanEvidence.Audit
+public meta import SoftwareChallenge.Audit
 
-public meta def main : List String → IO Unit := LeanEvidence.Audit.run {
-  layers := #[(`LeanEvidence, .tooling), (`LeanEvidence.Policy, .core), (`Examples, .tooling),
+public meta def main : List String → IO Unit := SoftwareChallenge.Audit.run {
+  layers := #[(`SoftwareChallenge, .tooling), (`SoftwareChallenge.Policy, .core), (`Examples, .tooling),
     (`Examples.ConstantFolding.Spec, .spec), (`Examples.ConstantFolding.Boundary, .boundary),
     (`Examples.ConstantFolding.Core, .core), (`Examples.ConstantFolding.Shell, .shell)] }
